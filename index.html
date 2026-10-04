@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>US Housing Prices, Dot by Dot</title>
+<meta name="description" content="An interactive dot density map of what American homes are worth and what they rent for: 130 million homes, one dot per 10, colored by price, from the Census Bureau's 2020–2024 American Community Survey.">
+<meta name="theme-color" content="#0d0f13">
+<meta property="og:title" content="US Housing Prices, Dot by Dot">
+<meta property="og:description" content="Every owner-occupied and rented home in America on one map, colored by home value or rent.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://housing.theojaffee.net/">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+<link rel="preload" href="data/manifest.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="map" role="region" aria-label="Dot density map of US housing prices"></div>
+
+  <aside id="panel" aria-label="Map controls and legend">
+    <header class="phead">
+      <h1>US housing prices, dot by dot</h1>
+      <button class="grip" id="grip" aria-label="Collapse panel" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></button>
+      <p class="sub" id="ratio" aria-live="polite">Each dot is 10 homes</p>
+    </header>
+
+    <div class="search" id="searchBox">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+      <input id="q" type="text" role="combobox" autocomplete="off" spellcheck="false" placeholder="Search a place or ZIP code" aria-label="Search a city, county, state or ZIP code" aria-autocomplete="list" aria-controls="results" aria-expanded="false">
+      <kbd class="hint" aria-hidden="true">/</kbd>
+      <ul id="results" role="listbox" aria-label="Places" hidden></ul>
+    </div>
+    <div id="searchStatus" class="sr" role="status" aria-live="polite"></div>
+
+    <div class="seg" role="radiogroup" aria-label="What to show" id="modeSeg">
+      <button role="radio" data-mode="value" aria-checked="true">Home values</button>
+      <button role="radio" data-mode="rent" aria-checked="false">Rents</button>
+    </div>
+
+    <div class="legend" id="legend" role="group" aria-describedby="legendHint"></div>
+    <div class="lfoot">
+      <span id="legendHint">Click to hide · double-click to isolate</span>
+      <button id="showAll" class="link" hidden>Show all</button>
+    </div>
+
+    <details class="opts" id="opts">
+      <summary>Display options</summary>
+      <div class="optrow">
+        <span class="olabel">Show</span>
+        <div class="seg small" role="radiogroup" aria-label="Show homes as dots or areas as medians" id="viewSeg">
+          <button role="radio" data-view="dots" aria-checked="true">Dots</button>
+          <button role="radio" data-view="areas" aria-checked="false">Area medians</button>
+        </div>
+      </div>
+      <div class="optrow">
+        <span class="olabel">Colors</span>
+        <div class="seg small" role="radiogroup" aria-label="Color palette" id="palSeg">
+          <button role="radio" data-pal="heat" aria-checked="true">Heat</button>
+          <button role="radio" data-pal="cvd" aria-checked="false">Color-blind safe</button>
+        </div>
+      </div>
+      <label class="optrow check"><input type="checkbox" id="labelsToggle" checked> Place names and roads</label>
+    </details>
+
+    <footer class="pfoot">
+      <button class="link" id="aboutBtn">About this map</button>
+      <span class="sep">·</span>
+      <span id="vintage">ACS 2020–2024</span>
+    </footer>
+  </aside>
+
+  <aside id="detail" aria-label="Area details" aria-live="polite" hidden>
+    <button class="close" id="detailClose" aria-label="Close details">
+      <svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
+    <div id="detailBody"></div>
+  </aside>
+
+  <div id="tip" role="tooltip" hidden></div>
+  <div id="crosshair" aria-hidden="true" hidden></div>
+
+  <div class="ctl" role="group" aria-label="Map controls">
+    <button id="zin" aria-label="Zoom in"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+    <button id="zout" aria-label="Zoom out"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8h10"/></svg></button>
+    <button id="locate" aria-label="Zoom to my location"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="4.2"/><path d="M8 1v2.5M8 12.5V15M1 8h2.5M12.5 8H15"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+    <button id="home" aria-label="Show the whole country"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M2 5.5l4-2 4 2 4-2v9l-4 2-4-2-4 2z"/><path d="M6 3.5v9M10 5.5v9"/></svg></button>
+  </div>
+
+  <div class="jump" role="group" aria-label="Jump to">
+    <button data-jump="ak">Alaska</button><button data-jump="hi">Hawaii</button><button data-jump="pr">Puerto Rico</button>
+  </div>
+
+  <div class="attr"><a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">Census ACS</a> · <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener"><span class="wide">OpenStreetMap</span><span class="narrow">OSM</span></a></div>
+
+  <div id="busy" aria-hidden="true"><i></i></div>
+
+  <dialog id="about" aria-labelledby="aboutTitle">
+    <button class="close" id="aboutClose" aria-label="Close">
+      <svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
+    <h2 id="aboutTitle">About this map</h2>
+    <p>Every occupied home in the United States and Puerto Rico is on this map: about 85 million owner-occupied homes, colored by what their owners say they are worth, and 45 million rented homes, colored by monthly gross rent (rent plus utilities). Zoomed in, each dot is <strong>10 homes</strong>; zoomed out, each dot stands for more (the panel shows how many).</p>
+    <p>Hover or tap anywhere for the area's numbers; click for details. From the keyboard, focus the map, move with the arrow keys and press Enter to open the area under the crosshair.</p>
+    <h3>Where the numbers come from</h3>
+    <p>Prices are from the US Census Bureau's <a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">American Community Survey</a> 5-year estimates for 2020–2024 (tables B25075 home value and B25063 gross rent), in 2024 dollars, for each of the country's 242,000 census block groups. A block group's dots are drawn from its own price distribution, so a dot's color is the price bracket of the homes it stands for, not a neighborhood average. Switch <em>Display options → Area medians</em> to see medians instead.</p>
+    <h3>Where the dots go</h3>
+    <p>Dots are placed at random inside the block group's 2020 census blocks, in proportion to how many housing units each block had in the 2020 Census, so they land where homes are and not in parks, lakes or empty land. A dot's exact position is not the location of any real home.</p>
+    <h3>Things to know</h3>
+    <ul>
+      <li>Home values are owners' own estimates, not sale prices, and the survey's 5-year window ends in 2024; prices in hot markets have moved since.</li>
+      <li>The Census Bureau caps its brackets at $2 million+ for value and $3,500+ for rent.</li>
+      <li>Block-group estimates come from small samples and have wide margins of error. Tract and county figures are more reliable.</li>
+      <li>Vacant homes (for sale, for rent, seasonal) are not shown. Renter homes with no cash rent are shown in gray.</li>
+      <li>The 2024 release has no figures for 39 block groups in Suffolk County, NY (most of Brentwood and Wyandanch). Their homes are placed using the county total minus the published block groups.</li>
+    </ul>
+    <p class="credit">Made by <a href="https://theojaffee.net" target="_blank" rel="noopener">Theo Jaffee</a>. Base map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors, © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>, via <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>; rendering by <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre</a> and <a href="https://protomaps.com/docs/pmtiles" target="_blank" rel="noopener">PMTiles</a>. <span id="builtNote"></span></p>
+  </dialog>
+
+  <div id="loading" role="status"><div><span>Loading map…</span><span class="bar" aria-hidden="true"><i></i></span></div></div>
+</div>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/pmtiles.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
