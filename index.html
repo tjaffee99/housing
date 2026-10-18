@@ -39,16 +39,12 @@
     <div class="seg" role="radiogroup" aria-label="What to show" id="modeSeg">
       <button role="radio" data-mode="cost" aria-checked="true">Monthly cost</button>
       <button role="radio" data-mode="value" aria-checked="false">Home values</button>
-      <button role="radio" data-mode="rent" aria-checked="false">Rents</button>
     </div>
-    <div class="seg small sub" role="radiogroup" aria-label="Which rents" id="rentSeg" hidden>
-      <button role="radio" data-rent="market" aria-checked="true">Market rent</button>
-      <button role="radio" data-rent="paid" aria-checked="false">What tenants pay</button>
-    </div>
-    <div class="seg small sub" role="radiogroup" aria-label="Whose homes" id="whoSeg">
+    <div class="seg small sub" role="radiogroup" aria-label="Which homes and prices" id="whoSeg">
       <button role="radio" data-who="all" aria-checked="true">Everyone</button>
       <button role="radio" data-who="owners" aria-checked="false">Buying</button>
-      <button role="radio" data-who="renters" aria-checked="false">Renting</button>
+      <button role="radio" data-who="renters" aria-checked="false" aria-label="Renting, at today's market rent">Renting</button>
+      <button role="radio" data-who="paid" aria-checked="false" aria-label="Rent paid, what tenants pay now">Rent paid</button>
     </div>
     <p class="mnote" id="modeNote" aria-live="polite"></p>
     <div class="sizes">
@@ -128,11 +124,10 @@
     <h2 id="aboutTitle">About this map</h2>
     <p>Every occupied home in the United States and Puerto Rico is on this map: about 85 million owner-occupied homes and 45 million rented ones. Zoomed in, each dot is <strong>10 homes</strong>; zoomed out, each dot stands for more (the panel shows how many). All prices are in <strong id="aboutMonth">current</strong> dollars, with no upper limit.</p>
     <p>Hover or tap anywhere for the area's numbers; click for details. From the keyboard, focus the map, move with the arrow keys and press Enter to open the area under the crosshair.</p>
-    <h3>Three ways to look at prices</h3>
+    <h3>Two ways to look at prices</h3>
     <ul>
+      <li><strong>Monthly cost</strong>: every home on one scale. Owner-occupied homes show what buying that home today would cost a month (<span id="aboutTerms">20% down, a 30-year fixed mortgage at today's average rate</span>, property tax and insurance); rented homes show their <em>market rent</em>, what the home would rent for if it were listed today. It sets places where most people rent (Lower Manhattan) beside places where nearly everyone owns (Atherton). <em>Buying</em> and <em>Renting</em> show each group on its own. <em>Rent paid</em> shows instead what tenants pay now, including long-held and rent-regulated leases (in much of New York or San Francisco the two differ by thousands of dollars a month). Rents include utilities.</li>
       <li><strong>Home values</strong>: owner-occupied homes, by what they are worth today.</li>
-      <li><strong>Rents</strong>: rented homes, either by <em>market rent</em>, what the home would rent for if it were listed today, or by <em>what tenants pay</em>, which includes long-held and rent-regulated leases (in much of New York or San Francisco the two differ by thousands of dollars a month). Rents include utilities.</li>
-      <li><strong>Monthly cost</strong>: every home on one scale. Owner-occupied homes show what buying that home today would cost a month (<span id="aboutTerms">20% down, a 30-year fixed mortgage at today's average rate</span>, property tax and insurance); rented homes show their market rent. It sets places where most people rent (Lower Manhattan) beside places where nearly everyone owns (Atherton). <em>Buying</em> and <em>Renting</em> show each group on its own.</li>
     </ul>
     <p><strong>Bedrooms</strong> shows only the homes of one size. The Census counts each block group's homes by bedrooms but doesn't say what each size costs, so each dot gets a size that keeps its block group's counts right, with bigger homes more likely to be the pricier ones (studios are picked at random among the cheaper homes, alongside 1-bedrooms). How strongly size follows price is set so that rents by bedrooms match the Census figures for each tract (table B25031), and values by bedrooms match Zillow's home value index by bedroom count, on average. Under <em>Area medians</em>, a size colors ZIP codes by the typical price of a home with that many bedrooms: Zillow's home values by bedroom count, HUD's Fair Market Rents (what a recent mover pays at the 40th percentile), and the Census median rent paid.</p>
     <h3>Where the numbers come from</h3>
@@ -148,7 +143,7 @@
     <ul>
       <li>Home values are owners' own estimates, adjusted to today; they are not sale prices.</li>
       <li>Block-group estimates come from small samples and have wide margins of error. Tract and county figures are more reliable, and prices far above $2M or $3,500 are modeled, not measured.</li>
-      <li>Vacant homes (for sale, for rent, seasonal) are not shown. Renter homes with no cash rent are gray under <em>What tenants pay</em>.</li>
+      <li>Vacant homes (for sale, for rent, seasonal) are not shown. Renter homes with no cash rent are gray under <em>Rent paid</em>.</li>
       <li>The 2024 release has no figures for 39 block groups in Suffolk County, NY (most of Brentwood and Wyandanch). Their homes are placed using the county total minus the published block groups.</li>
     </ul>
     <p class="credit">Made by <a href="https://theojaffee.net" target="_blank" rel="noopener">Theo Jaffee</a>. Data: US Census Bureau; Zillow Research (ZHVI, ZORI); HUD; CFPB/FFIEC HMDA; Freddie Mac and BLS via FRED; FEMA/ORNL USA Structures (buildings). Base map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors, © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>, via <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>; rendering by <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre</a> and <a href="https://protomaps.com/docs/pmtiles" target="_blank" rel="noopener">PMTiles</a>. <span id="builtNote"></span></p>

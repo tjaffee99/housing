@@ -21,9 +21,8 @@ const NO_CASH = '#7b808a';
 
 // ---------------------------------------------------------------- state
 const S = {
-  mode: 'cost',             // 'cost' | 'value' | 'rent'
-  rent: 'market',           // rents: 'market' (if let today) | 'paid' (what tenants pay)
-  who: 'all',               // monthly cost: 'all' | 'owners' (buying) | 'renters'
+  mode: 'cost',             // 'cost' | 'value'
+  who: 'all',               // monthly cost: 'all' | 'owners' (buying) | 'renters' (market rent) | 'paid' (what tenants pay)
   size: 'all',              // 'all' or bedrooms '0'..'5' (5 or more): dots of that size, or under area medians,
                             // ZIP codes by the typical price of that size
   view: 'dots',             // 'dots' | 'areas'
@@ -50,26 +49,26 @@ function loadSummary() {
 
 // Datasets: v home values (owners), p rent paid and m market rent (renters), c monthly cost (everyone).
 const DKEYS = ['v', 'p', 'm', 'c'];
-const dkey = () => S.mode === 'value' ? 'v' : S.mode === 'rent' ? (S.rent === 'paid' ? 'p' : 'm') : 'c';
+const dkey = () => S.mode === 'value' ? 'v' : S.who === 'paid' ? 'p' : S.who === 'renters' ? 'm' : 'c';
 const sizeView = () => S.size !== 'all' && S.view === 'areas';    // ZIP codes by typical price for a size
 const sizeDots = () => S.size !== 'all' && S.view === 'dots';      // dots of one size
 // ZIP property shown in the size view: v<b> Zillow value, m<b> HUD market rent, p<b> ACS rent paid, c<b> cost to buy
 function sizeField() {
   const b = S.size;
-  if (S.mode === 'value') return 'v' + b;
-  if (S.mode === 'rent') return (S.rent === 'paid' ? 'p' : 'm') + b;
-  return (S.who === 'renters' ? 'm' : 'c') + b;
+  return (S.mode === 'value' ? 'v' : S.who === 'paid' ? 'p' : S.who === 'renters' ? 'm' : 'c') + b;
 }
 // sizes with ZIP code figures: Zillow values for 1 to 5+ bedrooms, HUD and Census rents for studios to 4
 function sizeAvailable(b, mode = S.mode, who = S.who) {
-  const rents = mode === 'rent' || (mode === 'cost' && who === 'renters');
+  const rents = mode === 'cost' && (who === 'renters' || who === 'paid');
   return b === 'all' || (rents ? b !== '5' : b !== '0');
 }
 // class scale in use (legend, colors, hidden classes): 'v' value classes, else monthly classes ('p' adds
-// "No cash rent"). The size view shares its dataset's scale, so hidden ranges carry across views.
-const ckey = () => dkey();
+// "No cash rent"). Market rents share the monthly-cost scale and its hidden classes, and the size view
+// shares its dataset's, so hidden ranges carry across views.
+const scaleOf = k => k === 'm' ? 'c' : k;
+const ckey = () => scaleOf(dkey());
 // median property colored in the county / tract / block-group view
-function areaField() { return S.mode === 'cost' ? (S.who === 'owners' ? 'co' : S.who === 'renters' ? 'm' : 'c') : dkey(); }
+function areaField() { return S.mode === 'cost' && S.who === 'owners' ? 'co' : dkey(); }
 
 // ---------------------------------------------------------------- tile archives
 // Dots and area outlines are PMTiles archives, some split into column shards to keep every
@@ -191,10 +190,10 @@ function dotColorExpr(k) {
   return expr;
 }
 function visibleKs(k) {
-  const hid = S.hidden[k];
+  const hid = S.hidden[scaleOf(k)];
   const ks = [...labels(k).keys()].filter(i => !hid.has(i));
   if (k !== 'c') return ks;
-  return [...(S.who !== 'renters' ? ks : []), ...(S.who !== 'owners' ? ks.map(i => i + RENTER) : [])];
+  return S.who === 'owners' ? ks : [...ks, ...ks.map(i => i + RENTER)];
 }
 function stepExpr(field, k, none) {
   const e = edges(k), col = colors(k);
@@ -203,7 +202,7 @@ function stepExpr(field, k, none) {
   return ['case', ['has', field], step, none];
 }
 function classFilter(field, k, keepMissing) {
-  const hid = S.hidden[k];
+  const hid = S.hidden[scaleOf(k)];
   if (!hid.size) return keepMissing ? ['has', 'id'] : ['has', field];
   const e = edges(k), conds = ['any'];
   e.forEach((lo, i) => {
@@ -450,14 +449,13 @@ function applyLabels() {
   map.setLayoutProperty('road', 'visibility', S.labels ? 'visible' : 'none');
 }
 // segmented radio groups: checked state, roving tabindex, contextual rows
-const SEGS = [['#modeSeg', 'mode'], ['#rentSeg', 'rent'], ['#whoSeg', 'who'], ['#sizeSeg', 'size'], ['#viewSeg', 'view'], ['#palSeg', 'pal']];
+const SEGS = [['#modeSeg', 'mode'], ['#whoSeg', 'who'], ['#sizeSeg', 'size'], ['#viewSeg', 'view'], ['#palSeg', 'pal']];
 function syncSegs() {
   for (const [sel, key] of SEGS) $$(sel + ' button').forEach(b => {
     const on = b.dataset[key] === S[key];
     b.setAttribute('aria-checked', String(on));
     b.tabIndex = on ? 0 : -1;
   });
-  $('#rentSeg').hidden = S.mode !== 'rent';
   $('#whoSeg').hidden = S.mode !== 'cost';
   $$('#sizeSeg button').forEach(b => {
     const ok = S.view === 'dots' || sizeAvailable(b.dataset.size);
@@ -482,8 +480,7 @@ function noteText() {
     m: 'What each rental would rent for if it were listed today, utilities included.',
     p: 'What tenants pay now, utilities included, rent-regulated and long-held leases too.',
     c: S.who === 'owners' ? `What buying each owner-occupied home today would cost a month: ${buy}.`
-      : S.who === 'renters' ? 'What each rental would cost a month if let today, utilities included.'
-      : `What moving into each home today costs a month: buying it (${buy}) or renting it.`,
+      : `What moving into each home today costs a month: buying it (${buy}) or renting it at today's rent.`,
   }[dkey()];
   return sizeDots() ? `${note} Only ${sizeHomes(S.size)}.` : note;
 }
@@ -511,13 +508,13 @@ function legendTitle() {
     return { v: `${n} home value`, m: `${n} market rent (HUD)`, p: `${n} rent paid`, c: `${n} cost to buy` }[sizeField()[0]];
   }
   const k = dkey();
-  const base = k === 'c' && S.who === 'owners' ? 'Cost to buy' : k === 'c' && S.who === 'renters' ? 'Market rent' : NAMES[k];
+  const base = k === 'c' && S.who === 'owners' ? 'Cost to buy' : NAMES[k];
   return S.view === 'areas' ? 'Median ' + base.toLowerCase() : sizeDots() ? `${base}, ${sizeShort(S.size).toLowerCase()}` : base;
 }
 function shareNoun() {
   if (sizeView()) return 'US homes, by ZIP code';
   const n = { v: 'US owner-occupied homes', p: 'US rented homes', m: 'US rented homes' }[dkey()] ||
-    (S.who === 'owners' ? 'US owner-occupied homes' : S.who === 'renters' ? 'US rented homes' : 'US homes');
+    (S.who === 'owners' ? 'US owner-occupied homes' : 'US homes');
   return sizeDots() ? `${n} that are ${sizeHomes(S.size)}` : n;
 }
 function renderLegend() {
@@ -619,7 +616,7 @@ function setHover(level, id) {
 function curRow() {
   if (sizeView()) return sizeField()[0];
   const k = dkey();
-  return k === 'c' ? (S.who === 'renters' ? 'm' : S.who === 'owners' ? 'co' : 'c') : k;
+  return k === 'c' && S.who === 'owners' ? 'co' : k;
 }
 function kvRows(rows) {
   const cur = curRow();
@@ -756,7 +753,7 @@ function rentChart(r) {
   const hm = r.hm || [], hp = r.hp || [], tm = sum(hm), tp = sum(hp);
   if (!tm && !tp) return '<div class="note">No rented homes here.</div>';
   const lab = labels('p'), col = colors('p'), max = Math.max(...hm.map(x => x / (tm || 1)), ...hp.map(x => x / (tp || 1)));
-  const km = classOf('m', r.m), kp = classOf('p', r.p), first = S.rent === 'paid' ? 'p' : 'm';
+  const km = classOf('m', r.m), kp = classOf('p', r.p), first = S.who === 'paid' ? 'p' : 'm';
   const bar = (k, i) => {
     const v = k === 'm' ? (hm[i] || 0) / (tm || 1) : (hp[i] || 0) / (tp || 1);
     return `<i class="${k}" style="width:${(100 * v / max).toFixed(1)}%;background:${col[i]}"></i>`;
@@ -1140,7 +1137,7 @@ function visibleCenter() {
   return [p.left + (r.width - p.left - p.right) / 2, p.top + (r.height - p.top - p.bottom) / 2];
 }
 function home() { map.fitBounds(CONUS, { padding: pad(), duration: 1000 }); }
-// #<value|rent|cost>[-paid][-buying|-renting][-areas][-studio|-<n>bd]/zoom/lat/lng
+// #<value|cost>[-buying|-renting|-paid][-areas][-studio|-<n>bd]/zoom/lat/lng
 let hashTimer = 0;
 function writeHash() {
   clearTimeout(hashTimer);
@@ -1148,8 +1145,7 @@ function writeHash() {
     if (!map) return;
     const c = map.getCenter().wrap();
     const parts = [S.mode];
-    if (S.mode === 'rent' && S.rent === 'paid') parts.push('paid');
-    if (S.mode === 'cost' && S.who !== 'all') parts.push(S.who === 'owners' ? 'buying' : 'renting');
+    if (S.mode === 'cost' && S.who !== 'all') parts.push({ owners: 'buying', renters: 'renting', paid: 'paid' }[S.who]);
     if (S.view === 'areas') parts.push('areas');
     if (S.size !== 'all') parts.push(S.size === '0' ? 'studio' : S.size + 'bd');
     const h = `#${parts.join('-')}/${map.getZoom().toFixed(2)}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`;
@@ -1161,9 +1157,9 @@ function readHash() {
   if (!m) return null;
   const tok = m[1].split('-');
   if (!['value', 'rent', 'cost'].includes(tok[0])) return null;
-  S.mode = tok[0];
-  S.rent = tok.includes('paid') ? 'paid' : 'market';
-  S.who = tok.includes('buying') ? 'owners' : tok.includes('renting') ? 'renters' : 'all';
+  // #rent... links are from before rents moved under monthly cost
+  S.mode = tok[0] === 'value' ? 'value' : 'cost';
+  S.who = tok.includes('paid') ? 'paid' : tok.includes('buying') ? 'owners' : tok.includes('renting') || tok[0] === 'rent' ? 'renters' : 'all';
   S.view = tok.includes('areas') ? 'areas' : 'dots';
   const sz = tok.find(t => /^(studio|[1-5]bd)$/.test(t));
   S.size = sz ? (sz === 'studio' ? '0' : sz[0]) : 'all';
@@ -1174,7 +1170,7 @@ function readHash() {
 }
 
 // ---------------------------------------------------------------- panel controls
-const redrawing = { mode: true, rent: true, who: true, size: true };
+const redrawing = { mode: true, who: true, size: true };
 for (const [sel, key] of SEGS) {
   $$(sel + ' button').forEach(b => b.addEventListener('click', () => {
     if (b.disabled) return;

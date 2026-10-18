@@ -8,12 +8,12 @@ homes and 45 million rented ones. Zoomed in, one dot is 10 homes; zoomed out, a 
 64, 160 or 400. Prices have no upper limit (the Census Bureau's own figures stop at $2 million and
 $3,500 a month).
 
-- **Home values**: owner-occupied homes by what they are worth today.
-- **Rents**: rented homes by *market rent* (what the home would rent for if it were listed today) or by
-  *what tenants pay* (including long-held and rent-regulated leases).
 - **Monthly cost** (the default): every home on one monthly scale: owner-occupied homes by what buying them today
   would cost (20% down, 30-year fixed at the latest Freddie Mac rate, property tax, insurance),
-  rented homes by market rent. *Buying* and *Renting* show each group alone.
+  rented homes by *market rent* (what the home would rent for if it were listed today). *Buying* and
+  *Renting* show each group alone; *Rent paid* shows rented homes by what tenants pay now (including
+  long-held and rent-regulated leases).
+- **Home values**: owner-occupied homes by what they are worth today.
 - **Bedrooms** (Studio … 5+): only the homes of that size. Under *Area medians*, ZIP codes colored
   by the typical price of a home with that many bedrooms (Zillow values, HUD Fair Market Rents,
   Census rents paid).
@@ -42,7 +42,7 @@ CNAME                 housing.theojaffee.net
 
 The base map (roads, water, place names) streams from [OpenFreeMap](https://openfreemap.org),
 which is free and needs no key. Map position and mode are kept in the URL (`#value/11.00/40.7300/-73.9600`,
-`#rent-paid-areas/...`, `#cost-buying/...`, `#rent-2bd/...`), so links are shareable.
+`#cost-paid-areas/...`, `#cost-buying/...`, `#cost-renting-2bd/...`), so links are shareable.
 
 Keyboard: `/` focuses search; with the map focused, arrow keys pan, `+`/`-` zoom and Enter opens
 the area under the crosshair; Escape closes the details panel.
