@@ -1,0 +1,14 @@
+{
+ "built": "2026-10-18",
+ "acs": 2024,
+ "files": {
+  "dots-0.npz": "4ff6140fc34b2d6623a3a049c8f142adca94728ed931f84dffcf1c77527d684f",
+  "dots-1.npz": "36af565b7c3aab9771af2339d0199683cb1f35607b02ea515424bb6e3f2b994b",
+  "dots-2.npz": "4052293acb4f34d9b8cb883f805d3c98c9fe8ef007291ab387b5f72ec7dc78cb",
+  "points.npz": "30d4d03278de94ad0d0ca0c5c0bb37042cd8886afa53704471ad5b9202260e72",
+  "acs.pkl.gz": "6b0c4d34c1cb284e7a34166c02091952a737b0eb726a0ac03477dcab5fea80c7",
+  "meta.pkl": "746aa101cb66f19470bec55ac28de7fdbc4695e14ab36230e9afda8b3623a564",
+  "fy2027_safmrs.xlsx": "532d862a0a95ebb6ef7ff35a9a12924d2451a5fc985ca57a83fc334f229f0a8a",
+  "fy2027_fmrs.xlsx": "423d1c6f8ef285a0fec63526768245396ec6fca0c9a086f21f709cc0ac89d1b7"
+ }
+}
