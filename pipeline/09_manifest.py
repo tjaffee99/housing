@@ -52,6 +52,9 @@ def main():
         k = np.clip(np.searchsorted(edges, v[ok], side='right') - 1, 0, len(edges) - 1)
         sizes[col] = ints(np.bincount(k, weights=homes[ok], minlength=len(edges)))
     ml = monthly_labels(MONTHLY_CLASSES)
+    # homes by bedrooms (studio .. 5+) and class, from the dots
+    bs = json.load(open(os.path.join(WORK, 'bed_shares.json')))
+    nm, nv = len(MONTHLY_CLASSES), len(VALUE_CLASSES)
     manifest = {
         'built': datetime.date.today().isoformat(),
         'acs': f'{ACS_YEAR - 4}–{ACS_YEAR}',
@@ -60,10 +63,13 @@ def main():
         'tiers': tiers,
         'areas': files,
         'classes': {
-            'v': {'edges': VALUE_CLASSES, 'labels': value_labels(VALUE_CLASSES), 'us': ints(us.hv)},
-            'p': {'edges': MONTHLY_CLASSES, 'labels': ml + ['No cash rent'], 'us': ints(us.hp)},
-            'm': {'edges': MONTHLY_CLASSES, 'labels': ml, 'us': ints(us.hm)},
-            'c': {'edges': MONTHLY_CLASSES, 'labels': ml, 'us_owners': ints(us.hco), 'us_renters': ints(us.hm)},
+            'v': {'edges': VALUE_CLASSES, 'labels': value_labels(VALUE_CLASSES), 'us': ints(us.hv),
+                  'us_beds': [r[:nv] for r in bs['v']]},
+            'p': {'edges': MONTHLY_CLASSES, 'labels': ml + ['No cash rent'], 'us': ints(us.hp),
+                  'us_beds': [(r + [0] * (nm + 1))[:nm + 1] for r in bs['p']]},
+            'm': {'edges': MONTHLY_CLASSES, 'labels': ml, 'us': ints(us.hm), 'us_beds': [r[:nm] for r in bs['m']]},
+            'c': {'edges': MONTHLY_CLASSES, 'labels': ml, 'us_owners': ints(us.hco), 'us_renters': ints(us.hm),
+                  'us_owners_beds': [r[:nm] for r in bs['co']], 'us_renters_beds': [r[:nm] for r in bs['cr']]},
         },
         'sizes': sizes,
         'us': {k: num(us[k]) for k in ('owners', 'renters', 'v', 'p', 'm', 'c', 'co', 'income')},

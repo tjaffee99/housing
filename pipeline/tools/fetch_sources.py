@@ -22,7 +22,7 @@ GEO = {'cb_state': f'GENZ{ACS_YEAR}/shp/cb_{ACS_YEAR}_us_state_500k.zip', 'cb_co
        'cb_tract': f'GENZ{ACS_YEAR}/shp/cb_{ACS_YEAR}_us_tract_500k.zip', 'cb_bg': f'GENZ{ACS_YEAR}/shp/cb_{ACS_YEAR}_us_bg_500k.zip',
        'cb_nation': f'GENZ{ACS_YEAR}/shp/cb_{ACS_YEAR}_us_nation_5m.zip', 'cb_place': f'GENZ{ACS_YEAR}/shp/cb_{ACS_YEAR}_us_place_500k.zip',
        'cb_zcta': 'GENZ2020/shp/cb_2020_us_zcta520_500k.zip'}
-ACS = ['b25075', 'b25063', 'b25077', 'b25064', 'b25003', 'b25071', 'b19013', 'b25001', 'b25002', 'b25113', 'b25031', 'b25103']
+ACS = ['b25075', 'b25063', 'b25077', 'b25064', 'b25003', 'b25071', 'b19013', 'b25001', 'b25002', 'b25113', 'b25031', 'b25103', 'b25042']
 HUD = {f'fy{HUD_FY}_safmrs.xlsx': f'fmr{HUD_FY}/FY{HUD_FY % 100}_safmrs.xlsx', f'fy{HUD_FY}_fmrs.xlsx': f'fmr{HUD_FY}/FY{HUD_FY % 100}_FMRs.xlsx'}
 
 

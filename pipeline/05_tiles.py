@@ -6,11 +6,15 @@ so the app only downloads what is on screen.
   m  renter-occupied homes by market rent                      k = monthly class
   c  every occupied home by monthly cost (buying vs renting)   k = monthly class, +16 for renters
 
+Each also has one archive set per bedroom count (<letter><0..5>: studio .. five or more), which the
+app switches to when a size is picked, so the default view's tiles carry nothing extra.
+
 Dots that share a class `k` are packed into MultiPoint features of at most CHUNK points (Hilbert-ordered,
 so each chunk is spatially compact); chunks are drawn in random order so no class always paints on top.
 
 Inputs  work/base/*.npz (positions, nesting priority), work/now/*.npz (classes)
-Output  data/dots/<tier><v|p|m|c>[-<shard>].pmtiles, work/tiers.json (read by 09_manifest.py)
+Output  data/dots/<tier><v|p|m|c>[<bedrooms>][-<shard>].pmtiles, work/tiers.json and work/bed_shares.json
+        (homes by bedrooms and class, for the legend; read by 09_manifest.py)
 """
 import os, json, glob, gzip, time
 import numpy as np
@@ -62,7 +66,7 @@ def tileids(z, tx, ty):
     return base + hilbert(tx, ty, z) if z > 0 else np.zeros_like(tx, dtype=np.int64)
 
 def load_dots():
-    parts = {k: [] for k in ('x', 'y', 't', 'u', 'kv', 'kp', 'km', 'kc')}
+    parts = {k: [] for k in ('x', 'y', 't', 'u', 'beds', 'kv', 'kp', 'km', 'kc')}
     for st in STATES:
         d = np.load(os.path.join(WORK, 'base', st + '.npz'))
         n = np.load(os.path.join(WORK, 'now', st + '.npz'))
@@ -171,6 +175,14 @@ def main():
     print(f'{len(D["x"]):,} dots loaded')
     os.makedirs(os.path.join(OUT, 'dots'), exist_ok=True)
     for f in glob.glob(os.path.join(OUT, 'dots', '*.pmtiles')): os.remove(f)
+    # homes (dots x FINEST) by bedrooms and class: value, rent paid, market rent, cost to buy, renters' cost
+    shares = {}
+    for name, tenure, kcol in (('v', 0, 'kv'), ('p', 1, 'kp'), ('m', 1, 'km'), ('co', 0, 'kc'), ('cr', 1, 'kc')):
+        sel = D['t'] == tenure
+        n = int(D[kcol].max()) + 1
+        c = np.bincount(D['beds'][sel].astype(np.int64) * n + D[kcol][sel], minlength=6 * n).reshape(6, n) * FINEST
+        shares[name] = c.tolist()
+    json.dump(shares, open(os.path.join(WORK, 'bed_shares.json'), 'w'))
     tiers = []
     for tier in TIERS:
         t0 = time.time()
@@ -182,17 +194,21 @@ def main():
             k = D[kcol][sel].astype(np.int64)
             if tenure is None:
                 k = k + RENTER * D['t'][sel]
-            sub = {'x': D['x'][sel], 'y': D['y'][sel], 'k': k}
-            tiles = []
-            for z in tier['zooms']:
-                tiles += [(tid, x, data, z) for tid, x, data in encode_zoom(sub, z, rng, letter.encode())]
-            meta = {'name': tier['name'] + letter, 'vector_layers': [{'id': letter, 'fields': {'k': 'Number'}}], 'ratio': tier['ratio']}
-            shards, total = write_set(tier, letter, tiles, meta)
-            entry['dots'][letter] = int(sel.sum())
-            entry['files'][letter] = shards
-            sizes = [os.path.getsize(os.path.join(OUT, 'dots', s['file'])) for s in shards]
-            print(f'{tier["name"]}{letter}: ratio {tier["ratio"]}, {sel.sum():,} dots, {len(tiles):,} tiles, '
-                  f'files {[f"{s / 1e6:.1f}MB" for s in sizes]}', flush=True)
+            beds = D['beds'][sel]
+            for size in (None, *range(6)):
+                part = np.ones(len(k), bool) if size is None else beds == size
+                name = letter if size is None else f'{letter}{size}'
+                sub = {'x': D['x'][sel][part], 'y': D['y'][sel][part], 'k': k[part]}
+                tiles = []
+                for z in tier['zooms']:
+                    tiles += [(tid, x, data, z) for tid, x, data in encode_zoom(sub, z, rng, letter.encode())]
+                meta = {'name': tier['name'] + name, 'vector_layers': [{'id': letter, 'fields': {'k': 'Number'}}], 'ratio': tier['ratio']}
+                shards, total = write_set(tier, name, tiles, meta)
+                entry['dots'][name] = int(part.sum())
+                entry['files'][name] = shards
+                sizes = [os.path.getsize(os.path.join(OUT, 'dots', s['file'])) for s in shards]
+                print(f'{tier["name"]}{name}: ratio {tier["ratio"]}, {part.sum():,} dots, {len(tiles):,} tiles, '
+                      f'files {[f"{s / 1e6:.1f}MB" for s in sizes]}', flush=True)
         print(f'  {time.time() - t0:.0f}s')
         tiers.append(entry)
     json.dump(tiers, open(os.path.join(WORK, 'tiers.json'), 'w'), indent=1)

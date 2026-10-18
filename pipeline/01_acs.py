@@ -96,6 +96,10 @@ def main():
     bd.columns = [c for k in range(6) for c in (f'rb{k}', f'rb{k}_moe')]
     parts.append(bd)
     tax = read('b25103', [E('B25103', 1)]); tax.columns = ['med_tax']; parts.append(tax)
+    # tenure by bedrooms: owners (003-008) and renters (010-015) with none, 1, 2, 3, 4, 5+ bedrooms
+    beds = read('b25042', [E('B25042', i) for i in [*range(3, 9), *range(10, 16)]])
+    beds.columns = [f'beds_{t}{k}' for t in 'or' for k in range(6)]
+    parts.append(beds)
     df = pd.concat(parts, axis=1)
     # ACS annotation codes (-666666666 etc.) are stored as large negative numbers: treat as missing.
     df = df.mask(df < 0)

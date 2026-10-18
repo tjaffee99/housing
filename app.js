@@ -24,7 +24,8 @@ const S = {
   mode: 'cost',             // 'cost' | 'value' | 'rent'
   rent: 'market',           // rents: 'market' (if let today) | 'paid' (what tenants pay)
   who: 'all',               // monthly cost: 'all' | 'owners' (buying) | 'renters'
-  size: 'all',              // 'all' or bedrooms '0'..'4': ZIP codes by typical price for that size
+  size: 'all',              // 'all' or bedrooms '0'..'5' (5 or more): dots of that size, or under area medians,
+                            // ZIP codes by the typical price of that size
   view: 'dots',             // 'dots' | 'areas'
   pal: 'heat',
   labels: true,
@@ -50,7 +51,8 @@ function loadSummary() {
 // Datasets: v home values (owners), p rent paid and m market rent (renters), c monthly cost (everyone).
 const DKEYS = ['v', 'p', 'm', 'c'];
 const dkey = () => S.mode === 'value' ? 'v' : S.mode === 'rent' ? (S.rent === 'paid' ? 'p' : 'm') : 'c';
-const sizeView = () => S.size !== 'all';
+const sizeView = () => S.size !== 'all' && S.view === 'areas';    // ZIP codes by typical price for a size
+const sizeDots = () => S.size !== 'all' && S.view === 'dots';      // dots of one size
 // ZIP property shown in the size view: v<b> Zillow value, m<b> HUD market rent, p<b> ACS rent paid, c<b> cost to buy
 function sizeField() {
   const b = S.size;
@@ -58,8 +60,11 @@ function sizeField() {
   if (S.mode === 'rent') return (S.rent === 'paid' ? 'p' : 'm') + b;
   return (S.who === 'renters' ? 'm' : 'c') + b;
 }
-// Zillow publishes no studio home values
-const sizeAvailable = (b, mode = S.mode, who = S.who) => b !== '0' || mode === 'rent' || (mode === 'cost' && who === 'renters');
+// sizes with ZIP code figures: Zillow values for 1 to 5+ bedrooms, HUD and Census rents for studios to 4
+function sizeAvailable(b, mode = S.mode, who = S.who) {
+  const rents = mode === 'rent' || (mode === 'cost' && who === 'renters');
+  return b === 'all' || (rents ? b !== '5' : b !== '0');
+}
 // class scale in use (legend, colors, hidden classes): 'v' value classes, else monthly classes ('p' adds
 // "No cash rent"). The size view shares its dataset's scale, so hidden ranges carry across views.
 const ckey = () => dkey();
@@ -81,7 +86,7 @@ function shardFor(shards, maxzoom, z, x) {
 // Buffers are transferred to the worker (and detached), so every response needs a fresh one.
 const empty = () => ({ data: new ArrayBuffer(0) });
 maplibregl.addProtocol('hp', async (params, abort) => {
-  // hp://dots/<tier>/<v|p|m|c>/z/x/y   or   hp://areas/<set>/z/x/y
+  // hp://dots/<tier>/<v|p|m|c>[<bedrooms>]/z/x/y   or   hp://areas/<set>/z/x/y
   const m = params.url.match(/^hp:\/\/(dots\/\w+\/\w+|areas\/\w+)\/(\d+)\/(\d+)\/(\d+)/);
   if (!m) return empty();
   const [, path, z, x, y] = m;
@@ -127,8 +132,9 @@ function dayName(d) {
   return isNaN(t) ? d : t.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 const rateTxt = () => (100 * M.vintage.mortgage_rate).toFixed(2) + '%';
-const sizeName = b => b === '0' ? 'studio' : `${b}-bedroom`;
-const sizeShort = b => b === '0' ? 'Studio' : `${b} bd`;
+const sizeName = b => b === '0' ? 'studio' : b === '5' ? '5+ bedroom' : `${b}-bedroom`;
+const sizeShort = b => b === '0' ? 'Studio' : b === '5' ? '5+ bd' : `${b} bd`;
+const sizeHomes = b => b === '0' ? 'studios' : b === '5' ? 'homes with 5 or more bedrooms' : `${b}-bedroom homes`;
 function tractName(id) {
   const t = id.slice(5, 11);
   const main = String(parseInt(t.slice(0, 4), 10)), suf = t.slice(4);
@@ -296,6 +302,10 @@ function tierRadius(t, last) {
   return ['interpolate', ['linear'], ['zoom'], ...stops];
 }
 const dotVisible = k => S.view === 'dots' && !sizeView() && dkey() === k;
+// one size's dots come from that size's own archives, so the default view's tiles carry nothing extra
+const dotSet = k => k + (S.size === 'all' ? '' : S.size);
+const dotUrl = (t, k) => `hp://dots/${t.name}/${dotSet(k)}/{z}/{x}/{y}`;
+const dotUrls = new Map();    // source id -> tile URL in use
 function dotLayers() {
   const L = [];
   const last = M.tiers.length - 1;
@@ -347,6 +357,10 @@ function areaFillLayers() {
     paint: { 'fill-color': fillPaint(l), 'fill-opacity': fillOpacity(l), 'fill-antialias': false },
   }));
 }
+const SEL_CASE = { 'line-color': 'rgba(0,0,0,0.75)', 'line-width': 4.5 }, SEL_LINE = { 'line-color': '#ffffff', 'line-width': 2 };
+const selOn = l => S.sel && S.sel.level === l.key;
+const selVis = l => selOn(l) && layerVis(l) === 'visible' ? 'visible' : 'none';
+const selFilter = l => ['==', ['get', 'id'], selOn(l) ? S.sel.id : ''];
 function areaLineLayers() {
   const L = [];
   for (const l of AREAS) {
@@ -354,25 +368,39 @@ function areaLineLayers() {
     const outline = l.key === 'z' ? sizeView() : areasOn();
     L.push({ ...base, id: `ao-${l.key}`, type: 'line', layout: { ...base.layout, visibility: outline ? 'visible' : 'none' },
       paint: { 'line-color': 'rgba(10,12,16,0.55)', 'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.2, 10, 0.6, 14, 1] } });
-    const hl = { ...base.layout, visibility: layerVis(l) };
-    L.push({ ...base, id: `ah-${l.key}`, type: 'line', filter: ['==', ['get', 'id'], ''], layout: hl,
-      paint: { 'line-color': 'rgba(255,255,255,0.85)', 'line-width': 1.3 } });
-    L.push({ ...base, id: `as-case-${l.key}`, type: 'line', filter: ['==', ['get', 'id'], ''], layout: hl,
-      paint: { 'line-color': 'rgba(0,0,0,0.75)', 'line-width': 4.5 } });
-    L.push({ ...base, id: `as-${l.key}`, type: 'line', filter: ['==', ['get', 'id'], ''], layout: hl,
-      paint: { 'line-color': '#ffffff', 'line-width': 2 } });
+    // hover lights an outline through feature state: changing a filter instead would re-lay out every
+    // loaded tile in the worker, and the outline would trail behind the pointer
+    L.push({ ...base, id: `ah-${l.key}`, type: 'line', layout: { ...base.layout, visibility: layerVis(l) },
+      paint: { 'line-color': 'rgba(255,255,255,0.85)', 'line-width': 1.3, 'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 1, 0] } });
   }
+  // the selected area stays outlined at every zoom its level's tiles reach (overzoomed when zoomed in)...
+  for (const l of AREAS) {
+    const base = { source: `a-${l.key}`, 'source-layer': M.areas[l.set].layer, filter: selFilter(l), layout: { 'line-join': 'round', visibility: selVis(l) } };
+    L.push({ ...base, id: `as-case-${l.key}`, type: 'line', paint: SEL_CASE });
+    L.push({ ...base, id: `as-${l.key}`, type: 'line', paint: SEL_LINE });
+  }
+  // ... and below them (tracts under z8, block groups under z10) as one shape merged from its tiles,
+  // or a ring at its center once it would be too small to see
+  const poly = ['==', ['geometry-type'], 'Polygon'];
+  L.push({ id: 'selg-case', type: 'line', source: 'selg', maxzoom: 0, filter: poly, layout: { 'line-join': 'round' }, paint: SEL_CASE });
+  L.push({ id: 'selg', type: 'line', source: 'selg', maxzoom: 0, filter: poly, layout: { 'line-join': 'round' }, paint: SEL_LINE });
+  const pt = { type: 'circle', source: 'selg', maxzoom: 0, filter: ['==', ['geometry-type'], 'Point'] };
+  L.push({ ...pt, id: 'selg-pt-case', paint: { 'circle-radius': 5.5, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': SEL_CASE['line-color'], 'circle-stroke-width': 4.5 } });
+  L.push({ ...pt, id: 'selg-pt', paint: { 'circle-radius': 5.5, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': SEL_LINE['line-color'], 'circle-stroke-width': 2 } });
   return L;
 }
+const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 function buildStyle() {
   const sources = {
     base: { type: 'vector', url: OFM + '/planet' },
     mask: { type: 'geojson', data: 'data/mask.json' },
+    selg: { type: 'geojson', data: EMPTY_FC },
   };
   M.tiers.forEach(t => DKEYS.forEach(k => {
-    sources[`d-${t.name}-${k}`] = { type: 'vector', tiles: [`hp://dots/${t.name}/${k}/{z}/{x}/{y}`], minzoom: t.minzoom, maxzoom: t.maxzoom };
+    dotUrls.set(`d-${t.name}-${k}`, dotUrl(t, k));
+    sources[`d-${t.name}-${k}`] = { type: 'vector', tiles: [dotUrl(t, k)], minzoom: t.minzoom, maxzoom: t.maxzoom };
   }));
-  AREAS.forEach(l => { const a = M.areas[l.set]; sources[`a-${l.key}`] = { type: 'vector', tiles: [`hp://areas/${l.set}/{z}/{x}/{y}`], minzoom: a.minzoom, maxzoom: a.maxzoom }; });
+  AREAS.forEach(l => { const a = M.areas[l.set]; sources[`a-${l.key}`] = { type: 'vector', tiles: [`hp://areas/${l.set}/{z}/{x}/{y}`], minzoom: a.minzoom, maxzoom: a.maxzoom, promoteId: 'id' }; });
   // The mask fills foreign land and open sea with the water color: it darkens Canada and Mexico
   // (and their place names) and matches US waters exactly, so it leaves no halo around coasts.
   const mask = { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': P.mask, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.72, 9, 0.62, 13, 0.4] } };
@@ -386,13 +414,15 @@ function buildStyle() {
 
 // ---------------------------------------------------------------- apply state to the map
 function applyMode(opts = {}) {
-  if (sizeView() && !sizeAvailable(S.size)) S.size = '1';
+  if (sizeView() && !sizeAvailable(S.size)) S.size = S.size === '5' ? '4' : '1';
   // a view can't show every one of its classes hidden (e.g. after isolating "No cash rent" on paid-rent dots)
   const hk = ckey();
   if (shownClasses(hk).every(c => S.hidden[hk].has(c))) S.hidden[hk].clear();
   if (S.sel && (S.sel.level === 'z') !== sizeView()) closeDetail();
   for (const t of M.tiers) for (const k of DKEYS) {
     const id = `dot-${t.name}-${k}`, on = dotVisible(k);
+    const sid = `d-${t.name}-${k}`, url = dotUrl(t, k);
+    if (dotUrls.get(sid) !== url) { map.getSource(sid).setTiles([url]); dotUrls.set(sid, url); }
     map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
     if (on) {       // hidden layers are refreshed when they are next shown
       map.setPaintProperty(id, 'circle-color', dotColorExpr(k));
@@ -430,12 +460,11 @@ function syncSegs() {
   $('#rentSeg').hidden = S.mode !== 'rent';
   $('#whoSeg').hidden = S.mode !== 'cost';
   $$('#sizeSeg button').forEach(b => {
-    const ok = b.dataset.size === 'all' || sizeAvailable(b.dataset.size);
+    const ok = S.view === 'dots' || sizeAvailable(b.dataset.size);
     b.disabled = !ok;
-    b.title = ok ? '' : 'Zillow publishes no home values for studios';
+    b.title = ok ? '' : b.dataset.size === '0' ? 'Zillow publishes no home values for studios by ZIP code'
+      : 'HUD and the Census publish no rents for 5+ bedrooms by ZIP code';
   });
-  $('#viewSeg').closest('.optrow').classList.toggle('dim', sizeView());
-  $('#viewSeg').title = sizeView() ? 'Choosing one goes back to all sizes' : '';
 }
 function noteText() {
   const month = monthName(M.vintage.zhvi), buy = `20% down, ${rateTxt()} 30-year fixed, tax and insurance`;
@@ -448,21 +477,27 @@ function noteText() {
       c: `What buying a typical ${n} home costs a month in each ZIP code: ${buy}.`,
     }[f];
   }
-  switch (dkey()) {
-    case 'v': return `What owners' homes are worth, in ${month} dollars.`;
-    case 'm': return 'What each rental would rent for if it were listed today, utilities included.';
-    case 'p': return 'What tenants pay now, utilities included, rent-regulated and long-held leases too.';
-    default:
-      return S.who === 'owners' ? `What buying each owner-occupied home today would cost a month: ${buy}.`
-        : S.who === 'renters' ? 'What each rental would cost a month if let today, utilities included.'
-        : `What moving into each home today costs a month: buying it (${buy}) or renting it.`;
-  }
+  const note = {
+    v: `What owners' homes are worth, in ${month} dollars.`,
+    m: 'What each rental would rent for if it were listed today, utilities included.',
+    p: 'What tenants pay now, utilities included, rent-regulated and long-held leases too.',
+    c: S.who === 'owners' ? `What buying each owner-occupied home today would cost a month: ${buy}.`
+      : S.who === 'renters' ? 'What each rental would cost a month if let today, utilities included.'
+      : `What moving into each home today costs a month: buying it (${buy}) or renting it.`,
+  }[dkey()];
+  return sizeDots() ? `${note} Only ${sizeHomes(S.size)}.` : note;
 }
 
 // ---------------------------------------------------------------- legend
 function legendShares() {
   const k = ckey();
   if (sizeView()) return M.sizes[sizeField()] || [];
+  if (sizeDots()) {
+    const b = +S.size, C = M.classes[k];
+    if (k !== 'c') return C.us_beds[b];
+    const o = C.us_owners_beds[b], r = C.us_renters_beds[b];
+    return S.who === 'owners' ? o : S.who === 'renters' ? r : o.map((x, i) => x + r[i]);
+  }
   if (k === 'c') {
     const o = M.classes.c.us_owners, r = M.classes.c.us_renters;
     return S.who === 'owners' ? o : S.who === 'renters' ? r : o.map((x, i) => x + r[i]);
@@ -477,12 +512,13 @@ function legendTitle() {
   }
   const k = dkey();
   const base = k === 'c' && S.who === 'owners' ? 'Cost to buy' : k === 'c' && S.who === 'renters' ? 'Market rent' : NAMES[k];
-  return S.view === 'areas' ? 'Median ' + base.toLowerCase() : base;
+  return S.view === 'areas' ? 'Median ' + base.toLowerCase() : sizeDots() ? `${base}, ${sizeShort(S.size).toLowerCase()}` : base;
 }
 function shareNoun() {
   if (sizeView()) return 'US homes, by ZIP code';
-  return { v: 'US owner-occupied homes', p: 'US rented homes', m: 'US rented homes' }[dkey()] ||
+  const n = { v: 'US owner-occupied homes', p: 'US rented homes', m: 'US rented homes' }[dkey()] ||
     (S.who === 'owners' ? 'US owner-occupied homes' : S.who === 'renters' ? 'US rented homes' : 'US homes');
+  return sizeDots() ? `${n} that are ${sizeHomes(S.size)}` : n;
 }
 function renderLegend() {
   const k = ckey(), lab = labels(k), col = colors(k);
@@ -492,7 +528,7 @@ function renderLegend() {
   const max = Math.max(1, ...shown.map(i => us[i] || 0));
   const focusI = document.activeElement && document.activeElement.closest && document.activeElement.closest('.lrow') ? document.activeElement.closest('.lrow').dataset.i : null;
   const title = legendTitle();
-  const head = `<div class="lhead" aria-hidden="true"><span></span><span id="legendTitle">${esc(title)}</span><span>${sizeView() ? 'Share of homes' : 'Share of US homes'}</span></div>`;
+  const head = `<div class="lhead" aria-hidden="true"><span></span><span id="legendTitle">${esc(title)}</span><span>${sizeView() ? 'Share of homes' : sizeDots() ? `Share of US ${S.size === '0' ? 'studios' : sizeShort(S.size)}` : 'Share of US homes'}</span></div>`;
   const rows = shown.map(i => {
     const off = S.hidden[k].has(i);
     const share = tot ? (us[i] || 0) / tot : 0;
@@ -502,7 +538,7 @@ function renderLegend() {
       <span class="bar"><i style="width:${(100 * (us[i] || 0) / max).toFixed(1)}%"></i></span><span class="pc">${shareTxt}%</span></button>`;
   }).join('');
   $('#legend').innerHTML = head + rows;
-  $('#legend').setAttribute('aria-label', `${title}. Each button hides or shows a price range.`);
+  $('#legend').setAttribute('aria-label', `${title}. Each button hides or shows a price range; Shift+Enter shows only that one.`);
   $('#showAll').hidden = !shown.some(i => S.hidden[k].has(i));
   if (focusI != null) { const r = $(`#legend .lrow[data-i="${focusI}"]`); if (r) r.focus(); }
 }
@@ -519,16 +555,31 @@ function isolateClass(i, before) {
   if (!wasIsolated) labels(k).forEach((_, c) => { if (c !== i) h.add(c); });
   applyMode();
 }
-// A click toggles at once; a double-click undoes those two toggles and isolates the class.
-let beforeClick = null;
+// show only the classes from a to b
+function showRange(a, b) {
+  const k = ckey(), h = S.hidden[k], lo = Math.min(a, b), hi = Math.max(a, b);
+  h.clear();
+  labels(k).forEach((_, c) => { if (c < lo || c > hi) h.add(c); });
+  applyMode();
+}
+// A click toggles at once; a double-click undoes those two toggles and isolates the class; a
+// shift-click shows just the range from the last row clicked to this one.
+let beforeClick = null, anchor = null;
+$('#legend').addEventListener('mousedown', e => { if (e.shiftKey && e.target.closest('.lrow')) e.preventDefault(); });   // no text selection
 $('#legend').addEventListener('click', e => {
   const row = e.target.closest('.lrow'); if (!row) return;
-  if (e.detail <= 1) beforeClick = new Set(S.hidden[ckey()]);
+  const i = +row.dataset.i, k = ckey();
+  if (e.shiftKey) {
+    if (e.detail <= 1) showRange(anchor && anchor.k === k ? anchor.i : i, i);
+    return;
+  }
+  anchor = { k, i };
+  if (e.detail <= 1) beforeClick = new Set(S.hidden[k]);
   if (e.detail > 1) return;
-  toggleClass(+row.dataset.i);
+  toggleClass(i);
 });
 $('#legend').addEventListener('dblclick', e => {
-  const row = e.target.closest('.lrow'); if (!row) return;
+  const row = e.target.closest('.lrow'); if (!row || e.shiftKey) return;
   isolateClass(+row.dataset.i, beforeClick || new Set(S.hidden[ckey()]));
 });
 $('#legend').addEventListener('keydown', e => {
@@ -536,7 +587,7 @@ $('#legend').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); isolateClass(+row.dataset.i, new Set(S.hidden[ckey()])); }
 });
 $('#showAll').addEventListener('click', () => { S.hidden[ckey()].clear(); applyMode(); $('#legend .lrow')?.focus(); });
-$('#legendHint').textContent = IS_TOUCH ? 'Tap a price to hide or show it' : 'Click to hide · double-click (or Shift+Enter) to isolate';
+$('#legendHint').textContent = IS_TOUCH ? 'Tap a price to hide or show it' : 'Click to hide · double-click to isolate · shift-click for a range';
 
 // ---------------------------------------------------------------- dot ratio
 function tierAt(z) {
@@ -557,11 +608,12 @@ function updateRatio() {
 const tip = $('#tip');
 let hoverId = null, hoverLevel = null;
 const hitLayers = () => sizeView() ? ['af-z'] : LEVELS.map(l => `af-${l.key}`);
+const stateKey = (level, id) => ({ source: `a-${level}`, sourceLayer: M.areas[levelOf(level).set].layer, id });
 function setHover(level, id) {
   if (id === hoverId && level === hoverLevel) return;
-  if (hoverLevel) map.setFilter(`ah-${hoverLevel}`, ['==', ['get', 'id'], '']);
+  if (hoverLevel) map.setFeatureState(stateKey(hoverLevel, hoverId), { hover: false });
   hoverId = id; hoverLevel = level;
-  if (level) map.setFilter(`ah-${level}`, ['==', ['get', 'id'], id]);
+  if (level) map.setFeatureState(stateKey(level, id), { hover: true });
 }
 // the row for the dataset on screen is highlighted
 function curRow() {
@@ -580,7 +632,7 @@ function tipHtml(level, p) {
     const b = S.size, n = sizeName(b);
     const rows = [['v', 'Home value (Zillow)', money(p['v' + b])], ['c', 'Cost to buy, a month', monthly(p['c' + b])],
       ['m', 'Market rent (HUD)', monthly(p['m' + b])], ['p', 'Rent paid (Census)', monthly(p['p' + b])]];
-    return head + `<div class="tsec">Typical ${n}${b === '0' ? '' : ' home'}</div>` + kvRows(b === '0' ? rows.slice(2) : rows) + '<div class="th">Click for all sizes</div>';
+    return head + `<div class="tsec">Typical ${n}${b === '0' ? '' : ' home'}</div>` + kvRows(b === '0' ? rows.slice(2) : b === '5' ? rows.slice(0, 2) : rows) + '<div class="th">Click for all sizes</div>';
   }
   const o = +p.o || 0, r = +p.r || 0, occ = o + r, est = p.x ? '≈' : '';
   if (!occ) return head + '<div class="th">No occupied homes here in the Census figures</div>';
@@ -652,7 +704,10 @@ function setHitVisibility() {
   // layers just switched on report their (unrequested) sources as loaded: restart pickArea's grace period
   if (now !== hitVis && hitVis) revealedAt = performance.now();
   hitVis = now;
-  for (const l of AREAS) for (const p of ['af', 'ah', 'as-case', 'as']) map.setLayoutProperty(`${p}-${l.key}`, 'visibility', layerVis(l));
+  for (const l of AREAS) {
+    for (const p of ['af', 'ah']) map.setLayoutProperty(`${p}-${l.key}`, 'visibility', layerVis(l));
+    for (const p of ['as-case', 'as']) map.setLayoutProperty(`${p}-${l.key}`, 'visibility', selVis(l));
+  }
 }
 
 // ---------------------------------------------------------------- detail panel
@@ -851,10 +906,63 @@ async function renderZip(opts) {
   if (!SUM) loadSummary().then(draw).catch(() => {});
 }
 function setSelected() {
-  for (const l of AREAS) {
-    const f = S.sel && S.sel.level === l.key ? ['==', ['get', 'id'], S.sel.id] : ['==', ['get', 'id'], ''];
-    map.setFilter(`as-${l.key}`, f); map.setFilter(`as-case-${l.key}`, f);
+  for (const l of AREAS) for (const p of ['as-case', 'as']) {
+    map.setFilter(`${p}-${l.key}`, selFilter(l));
+    map.setLayoutProperty(`${p}-${l.key}`, 'visibility', selVis(l));
   }
+  updateSelShape();
+}
+// A tract or block group's tiles start at z8 or z10. To keep it outlined when zoomed out further,
+// its pieces in the tiles loaded so far (each tile's piece runs a little past the tile's edge) are
+// merged into one shape and drawn below that zoom.
+let selShape = { key: '', pieces: [], seen: new Set() }, clipP = null, shapeT = 0;
+function loadClip() {
+  if (!clipP) clipP = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'vendor/polygon-clipping.min.js';
+    s.onload = () => res(window.polygonClipping);
+    s.onerror = () => { clipP = null; s.remove(); rej(new Error('polygon-clipping')); };
+    document.head.appendChild(s);
+  });
+  return clipP;
+}
+function updateSelShape() {
+  const src = map.getSource('selg');
+  const l = S.sel && (S.sel.level === 't' || S.sel.level === 'b') ? levelOf(S.sel.level) : null;
+  const key = l ? l.key + S.sel.id : '';
+  if (key !== selShape.key) {
+    selShape = { key, pieces: [], seen: new Set() };
+    src.setData(EMPTY_FC);
+    const top = l ? M.areas[l.set].minzoom : 0;
+    map.setLayerZoomRange('selg-case', 0, top); map.setLayerZoomRange('selg', 0, top);
+    for (const id of ['selg-pt-case', 'selg-pt']) map.setLayerZoomRange(id, 0, 0);
+  }
+  if (!l || map.getZoom() < M.areas[l.set].minzoom) return;
+  let added = 0;
+  for (const f of map.querySourceFeatures(`a-${l.key}`, { sourceLayer: M.areas[l.set].layer, filter: ['==', ['get', 'id'], S.sel.id] })) {
+    const g = f.geometry;
+    for (const p of g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : []) {
+      const sig = p[0].length + ':' + p[0][0].join();
+      if (selShape.seen.has(sig)) continue;
+      selShape.seen.add(sig); selShape.pieces.push(p); added++;
+    }
+  }
+  if (!added) return;
+  const mine = selShape;
+  loadClip().then(pc => {
+    if (mine !== selShape) return;
+    let coords;
+    try { coords = pc.union(...mine.pieces); } catch (_) { coords = mine.pieces; }
+    let x0 = 180, y0 = 90, x1 = -180, y1 = -90;
+    for (const poly of coords) for (const [x, y] of poly[0]) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    // the ring shows up to the zoom where the shape's longer side reaches 8 px
+    const cy = (y0 + y1) / 2, span = Math.max(x1 - x0, (y1 - y0) / Math.cos(cy * Math.PI / 180), 1e-6);
+    const zr = Math.max(0, Math.min(24, Math.log2(8 * 360 / (512 * span))));
+    for (const id of ['selg-pt-case', 'selg-pt']) map.setLayerZoomRange(id, 0, zr);
+    src.setData({ type: 'FeatureCollection', features: [
+      { type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: coords } },
+      { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [(x0 + x1) / 2, cy] } }] });
+  }).catch(() => {});
 }
 let opener = null;
 function select(level, id, opts = {}) {
@@ -886,7 +994,7 @@ function flyToArea(level, id) {
     }).catch(() => {});
     return;
   }
-  // keep the zoom inside the range where this level's outline is drawn, and the selected spot in view
+  // zoom to where this level's areas are the ones shown (its outline stays at any zoom), selected spot in view
   const l = levelOf(level), z = map.getZoom();
   const target = level === 'c' ? 7.2 : level === 't' ? 9.2 : 11.2;
   const ll = S.sel && S.sel.origin && S.sel.origin.lngLat;
@@ -1032,7 +1140,7 @@ function visibleCenter() {
   return [p.left + (r.width - p.left - p.right) / 2, p.top + (r.height - p.top - p.bottom) / 2];
 }
 function home() { map.fitBounds(CONUS, { padding: pad(), duration: 1000 }); }
-// #<value|rent|cost>[-paid][-buying|-renting][-areas|-studio|-<n>bd]/zoom/lat/lng
+// #<value|rent|cost>[-paid][-buying|-renting][-areas][-studio|-<n>bd]/zoom/lat/lng
 let hashTimer = 0;
 function writeHash() {
   clearTimeout(hashTimer);
@@ -1043,7 +1151,7 @@ function writeHash() {
     if (S.mode === 'rent' && S.rent === 'paid') parts.push('paid');
     if (S.mode === 'cost' && S.who !== 'all') parts.push(S.who === 'owners' ? 'buying' : 'renting');
     if (S.view === 'areas') parts.push('areas');
-    if (sizeView()) parts.push(S.size === '0' ? 'studio' : S.size + 'bd');
+    if (S.size !== 'all') parts.push(S.size === '0' ? 'studio' : S.size + 'bd');
     const h = `#${parts.join('-')}/${map.getZoom().toFixed(2)}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`;
     if (location.hash !== h) history.replaceState(null, '', h);
   }, 250);
@@ -1057,7 +1165,7 @@ function readHash() {
   S.rent = tok.includes('paid') ? 'paid' : 'market';
   S.who = tok.includes('buying') ? 'owners' : tok.includes('renting') ? 'renters' : 'all';
   S.view = tok.includes('areas') ? 'areas' : 'dots';
-  const sz = tok.find(t => /^(studio|[1-4]bd)$/.test(t));
+  const sz = tok.find(t => /^(studio|[1-5]bd)$/.test(t));
   S.size = sz ? (sz === 'studio' ? '0' : sz[0]) : 'all';
   if (!m[2]) return null;
   const zoom = Number(m[2]), lat = Number(m[3]), lng = Number(m[4]);
@@ -1070,9 +1178,7 @@ const redrawing = { mode: true, rent: true, who: true, size: true };
 for (const [sel, key] of SEGS) {
   $$(sel + ' button').forEach(b => b.addEventListener('click', () => {
     if (b.disabled) return;
-    // picking Dots or Area medians while a size is shown goes back to all sizes
-    if (key === 'view' && sizeView()) S.size = 'all';
-    else if (S[key] === b.dataset[key]) return;
+    if (S[key] === b.dataset[key]) return;
     S[key] = b.dataset[key];
     if (key === 'pal') try { localStorage.setItem('housing-pal', S.pal); } catch (_) {}
     applyMode({ redraw: redrawing[key] || key === 'pal' });
@@ -1136,7 +1242,7 @@ function wireKeyboardMap() {
 // Start fetching the first dot archive's header and directory while the map style and base map load.
 function prefetch(view) {
   const z = view ? view.zoom : 3.8;
-  const t = tierAt(z), files = !sizeView() && S.view === 'dots' ? t.files[dkey()] || [] : [];
+  const t = tierAt(z), files = !sizeView() && S.view === 'dots' ? t.files[dotSet(dkey())] || [] : [];
   for (const f of files) archive('dots/' + f.file).getHeader().catch(() => {});
 }
 async function boot() {
@@ -1157,7 +1263,7 @@ async function boot() {
   $('#aboutTerms').textContent = `20% down, a ${M.vintage.term_years}-year fixed mortgage at ${rateTxt()}, the Freddie Mac average for ${dayName(M.vintage.mortgage_date)}`;
   $('#builtNote').textContent = `Data built ${M.built}.`;
   if (small()) collapsePanel(true);
-  if (sizeView() && !sizeAvailable(S.size)) S.size = '1';
+  if (sizeView() && !sizeAvailable(S.size)) S.size = S.size === '5' ? '4' : '1';
   syncSegs();
   $('#modeNote').textContent = noteText();
   map = new maplibregl.Map({
@@ -1187,6 +1293,10 @@ async function boot() {
   map.once('idle', () => setTimeout(() => { revealHit(); loadSummary().catch(() => {}); }, 300));
   setTimeout(() => { if (ready) { revealHit(); loadSummary().catch(() => {}); } }, 6000);
   map.on('zoom', updateRatio);
+  map.on('sourcedata', e => {
+    if (!selShape.key || !e.tile || e.sourceId !== 'a-' + selShape.key[0]) return;
+    clearTimeout(shapeT); shapeT = setTimeout(() => { if (S.sel) updateSelShape(); }, 150);
+  });
   map.on('moveend', writeHash);
   // a hand-edited URL hash jumps there (our own replaceState calls don't fire this)
   addEventListener('hashchange', () => {

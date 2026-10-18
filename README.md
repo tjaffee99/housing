@@ -14,8 +14,9 @@ $3,500 a month).
 - **Monthly cost** (the default): every home on one monthly scale: owner-occupied homes by what buying them today
   would cost (20% down, 30-year fixed at the latest Freddie Mac rate, property tax, insurance),
   rented homes by market rent. *Buying* and *Renting* show each group alone.
-- **Size** (Studio … 4 bd): ZIP codes colored by the typical price of a home with that many
-  bedrooms (Zillow values, HUD Fair Market Rents, Census rents paid).
+- **Bedrooms** (Studio … 5+): only the homes of that size. Under *Area medians*, ZIP codes colored
+  by the typical price of a home with that many bedrooms (Zillow values, HUD Fair Market Rents,
+  Census rents paid).
 - **Area medians** (Display options): counties, tracts or block groups colored by their median.
 
 A fully static site: no build step for the page, no API keys, no server code.
@@ -25,12 +26,13 @@ index.html            page shell
 style.css             UI styles
 app.js                map style, tile routing, legend, hover/click details, search
 favicon.svg
-vendor/               MapLibre GL JS 5.24.0 and PMTiles 4.5.0 (self-hosted)
+vendor/               MapLibre GL JS 5.24.0, PMTiles 4.5.0 and polygon-clipping 0.15.7 (self-hosted)
 data/manifest.json    tiers, price classes, vintages and the file index the app loads first
 data/summary.json     US, state and county statistics and names (loaded once the map is idle)
 data/search.json      states, counties, places and ZIP codes for the search box
 data/mask.json        world-minus-US polygons that dim the rest of the base map and its place names
 data/dots/t<N><v|p|m|c>.pmtiles   the dots: five nested zoom tiers × value, rent paid, market rent, monthly cost
+data/dots/t<N><v|p|m|c><0-5>.pmtiles   the same, one set per bedroom count (studio … 5+), loaded when a size is picked
 data/areas/{c,t,b,z}.pmtiles      county, tract, block-group and ZIP outlines with headline medians
 data/areas/NNNNN.json full statistics and price distributions for each county's tracts and block groups
 pipeline/             Python scripts that build data/ (see below)
@@ -49,7 +51,8 @@ the area under the crosshair; Escape closes the details panel.
 
 The base is the Census Bureau's American Community Survey, 2020–2024 5-year estimates, for every
 block group: B25075 (home value, 26 brackets), B25063 (gross rent, 24 brackets + no cash rent),
-B25003 (tenure), B19013 (income), B25071 (rent burden), B25001/B25002 (units, vacancy), plus, for
+B25003 (tenure), B25042 (tenure by bedrooms), B19013 (income), B25071 (rent burden), B25001/B25002
+(units, vacancy), plus, for
 tracts and ZIP codes, B25113 (median rent by year moved in), B25031 (median rent by bedrooms) and
 B25103 (property taxes).
 
@@ -93,9 +96,18 @@ B25103 (property taxes).
    latest Freddie Mac weekly rate, property tax at the tract's effective rate (median tax ÷ median
    value; at least 1.1% in California, where a sale resets the tax base), insurance 0.5% of value a
    year. Renters: market rent.
-6. **Sizes.** ZIP codes: Zillow's ZHVI by bedroom count, HUD's Small Area Fair Market Rents (county FMRs
-   outside metro areas), the Census median rent paid by bedrooms (in today's dollars), and the
-   monthly cost of buying Zillow's typical home of each size.
+6. **Bedrooms.** Every dot has a size (studio, 1–4, 5+). B25042 gives each block group's homes by
+   tenure and bedrooms, not prices by bedrooms, so a block group's dots of one tenure are ordered by
+   ρ·z + √(1−ρ²)·noise, z the normal score of the dot's price rank there, and take sizes smallest
+   first, with counts that match the block group's (systematic rounding). Studios share the
+   1-bedroom place and are picked at random among those dots: the cheapest rents in a neighborhood
+   are more often long-held larger homes than studios. ρ is fitted per tenure on every third tract:
+   for renters, so that tract medians of rent by bedrooms match B25031 (ρ ≈ 0.6, every size within
+   about 7% on average); for owners, so that ZIP-code ratios between sizes match Zillow's ZHVI by
+   bedroom count over 2020–2024 (ρ ≈ 0.4). `pipeline/beds.py`.
+7. **Sizes by ZIP code** (*Area medians* with a size): Zillow's ZHVI by bedroom count, HUD's Small
+   Area Fair Market Rents (county FMRs outside metro areas), the Census median rent paid by bedrooms
+   (in today's dollars), and the monthly cost of buying Zillow's typical home of each size.
 
 Area statistics (medians and class shares for every block group, tract, county, state, ZIP code and
 the nation) come from the same distributions, integrated exactly rather than from the dots.
@@ -146,9 +158,9 @@ python3 tools/fetch_structures.py        # USA Structures: every building (~45 G
 
 python3 01_acs.py        # parse ACS tables (1 min)
 PROCS=2 python3 02_dots.py   # 13 million dots placed on buildings (~20 min; ~5 GB of memory per process)
-python3 03_base.py       # reference prices per dot, uncapped; market rents (1 min)
+python3 03_base.py       # reference prices per dot, uncapped; market rents; bedrooms (4 min)
 python3 04_prices.py     # today's prices, monthly costs, area statistics (5 min)
-python3 05_tiles.py      # dot tiles, four modes (2 min)
+python3 05_tiles.py      # dot tiles, four modes, all sizes and each bedroom count (6 min)
 python3 06_areas.py      # outlines, detail files, summary (8 min)
 python3 07_search.py     # search index (3 min)
 python3 08_mask.py       # data/mask.json
@@ -188,5 +200,5 @@ Vercel, S3/R2): serve the repository root with no build command.
 US Census Bureau (ACS 2020–2024, TIGER/Line, cartographic boundaries; public domain). Zillow Research:
 ZHVI and ZORI (free to use with attribution). HUD Fair Market Rents FY2027. CFPB/FFIEC HMDA
 2024–2025. Freddie Mac PMMS and BLS CPI via FRED. FEMA/ORNL USA Structures (public domain). MapLibre GL JS (BSD-3-Clause,
-`vendor/MAPLIBRE-LICENSE.txt`), PMTiles (BSD-3-Clause). Base map © OpenStreetMap contributors
+`vendor/MAPLIBRE-LICENSE.txt`), PMTiles (BSD-3-Clause), polygon-clipping (MIT, `vendor/POLYGON-CLIPPING-LICENSE.md`). Base map © OpenStreetMap contributors
 (ODbL), tiles by OpenFreeMap (OpenMapTiles schema).

@@ -21,15 +21,18 @@ Each rental's market rent is its paid rent times M^(2(1-q)), q its rank among th
 cheapest (longest-held, rent-regulated) homes gain M^2, the median M, the dearest nothing.
 
 Inputs  work/acs.pkl, work/dots/*.npz, work/hmda/*.csv.gz, work/geo/cb_zcta.zip, work/zillow (county top-tier ZHVI)
+Bedrooms: see beds.py.
+
 Output  work/base/<state>.npz   dots: x y t u g (as 02_dots) + z (ZCTA index), ref (value or paid rent),
-                                mref (market rent), q (rank among the tract's rents), nc (no cash rent)
+                                mref (market rent), q (rank among the tract's rents), nc (no cash rent),
+                                beds (0 studio .. 5 five or more)
         work/base/points.npz    block-group quadrature points for area statistics: g t nc ref mref q w
         work/base/meta.pkl      ZCTA codes, block group -> main ZCTA, tract market-rent ratios, tax rates
 """
 import os, sys, glob, pickle, time
 import multiprocessing as mp
 import numpy as np, pandas as pd, geopandas as gpd, shapely
-import econ
+import econ, beds
 from common import WORK, STATES, VALUE_EDGES, RENT_EDGES, ACS_YEAR
 
 BASE = os.path.join(WORK, 'base')
@@ -446,8 +449,24 @@ def main():
     P = points(acs, S)
     np.savez(os.path.join(BASE, 'points.npz'), **P)
     print(f'{len(P["g"]):,} area points ({time.time() - t0:.0f}s)')
+    # bedrooms, fitted over every state's dots at once
+    t0 = time.time()
+    parts = {st: dict(np.load(os.path.join(BASE, st + '.npz'))) for st in STATES}
+    D = {k: np.concatenate([parts[st][k] for st in STATES]) for k in ('g', 't', 'ref', 'nc', 'z')}
+    D['g'] = D['g'].astype(np.int64); D['tract'] = S['bg_tract'][D['g']]
+    b, fits = beds.assign_all(acs, D, np.asarray(tracts), zc, np.random.default_rng(41))
+    off = 0
+    for st in STATES:
+        n = len(parts[st]['g'])
+        parts[st]['beds'] = b[off:off + n]; off += n
+        np.savez(os.path.join(BASE, st + '.npz'), **parts[st])
+    for t, (rho, tab) in fits.items():
+        mix = np.bincount(b[D['t'] == t], minlength=beds.SIZES) / max((D['t'] == t).sum(), 1)
+        print(f'bedrooms, {["owners", "renters"][t]}: rho {rho:.2f}, mean log error by size '
+              f'{np.round(tab.loc[rho].to_numpy()[1:], 3).tolist()}, mix {np.round(mix, 3).tolist()}')
+    print(f'bedrooms assigned ({time.time() - t0:.0f}s)')
     meta = dict(zcta=zc, bg_zcta=bg_zcta, bg=np.asarray(bg_ids), counties=np.asarray(counties), tracts=np.asarray(tracts),
-                mratio=M, ralpha=ra, diag=dict(value=vdiag, rent=rdiag))
+                mratio=M, ralpha=ra, diag=dict(value=vdiag, rent=rdiag, beds={t: f for t, f in fits.items()}))
     pickle.dump(meta, open(os.path.join(BASE, 'meta.pkl'), 'wb'))
 
 

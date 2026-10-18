@@ -13,7 +13,7 @@ from common import WORK, STATES, ACS_YEAR, HUD_FY
 
 BASE = os.path.join(WORK, 'base')
 CHUNK = 80_000_000
-DOT_FIELDS = ('x', 'y', 't', 'u', 'g', 'z', 'ref', 'q', 'nc')
+DOT_FIELDS = ('x', 'y', 't', 'u', 'g', 'z', 'ref', 'q', 'nc', 'beds')
 # ACS columns the refresh still reads (04_prices.py, 06_areas.py)
 ACS_COLS = ['owners', 'renters', 'households', 'units', 'vacant', 'rent_burden', 'med_income', 'synth', 'med_tax',
             'med_value', 'med_value_moe', 'med_rent', 'med_rent_moe'] + [f'rb{b}' for b in range(6)]

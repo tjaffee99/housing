@@ -52,14 +52,15 @@
     </div>
     <p class="mnote" id="modeNote" aria-live="polite"></p>
     <div class="sizes">
-      <span class="olabel" id="sizeLabel">Size</span>
+      <span class="olabel" id="sizeLabel">Bedrooms</span>
       <div class="seg small" role="radiogroup" aria-labelledby="sizeLabel" id="sizeSeg">
         <button role="radio" data-size="all" aria-checked="true">All</button>
         <button role="radio" data-size="0" aria-checked="false">Studio</button>
-        <button role="radio" data-size="1" aria-checked="false" aria-label="1 bd, 1 bedroom">1 bd</button>
-        <button role="radio" data-size="2" aria-checked="false" aria-label="2 bd, 2 bedrooms">2 bd</button>
-        <button role="radio" data-size="3" aria-checked="false" aria-label="3 bd, 3 bedrooms">3 bd</button>
-        <button role="radio" data-size="4" aria-checked="false" aria-label="4 bd, 4 bedrooms">4 bd</button>
+        <button role="radio" data-size="1" aria-checked="false" aria-label="1 bedroom">1</button>
+        <button role="radio" data-size="2" aria-checked="false" aria-label="2 bedrooms">2</button>
+        <button role="radio" data-size="3" aria-checked="false" aria-label="3 bedrooms">3</button>
+        <button role="radio" data-size="4" aria-checked="false" aria-label="4 bedrooms">4</button>
+        <button role="radio" data-size="5" aria-checked="false" aria-label="5 or more bedrooms">5+</button>
       </div>
     </div>
 
@@ -133,7 +134,7 @@
       <li><strong>Rents</strong>: rented homes, either by <em>market rent</em>, what the home would rent for if it were listed today, or by <em>what tenants pay</em>, which includes long-held and rent-regulated leases (in much of New York or San Francisco the two differ by thousands of dollars a month). Rents include utilities.</li>
       <li><strong>Monthly cost</strong>: every home on one scale. Owner-occupied homes show what buying that home today would cost a month (<span id="aboutTerms">20% down, a 30-year fixed mortgage at today's average rate</span>, property tax and insurance); rented homes show their market rent. It sets places where most people rent (Lower Manhattan) beside places where nearly everyone owns (Atherton). <em>Buying</em> and <em>Renting</em> show each group on its own.</li>
     </ul>
-    <p><strong>Size</strong> switches to ZIP codes colored by the typical price of a home with that many bedrooms: Zillow's home values by bedroom count, HUD's Fair Market Rents (what a recent mover pays at the 40th percentile), and the Census median rent paid.</p>
+    <p><strong>Bedrooms</strong> shows only the homes of one size. The Census counts each block group's homes by bedrooms but doesn't say what each size costs, so each dot gets a size that keeps its block group's counts right, with bigger homes more likely to be the pricier ones (studios are picked at random among the cheaper homes, alongside 1-bedrooms). How strongly size follows price is set so that rents by bedrooms match the Census figures for each tract (table B25031), and values by bedrooms match Zillow's home value index by bedroom count, on average. Under <em>Area medians</em>, a size colors ZIP codes by the typical price of a home with that many bedrooms: Zillow's home values by bedroom count, HUD's Fair Market Rents (what a recent mover pays at the 40th percentile), and the Census median rent paid.</p>
     <h3>Where the numbers come from</h3>
     <p>The base is the Census Bureau's <a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">American Community Survey</a>, 2020–2024: each of the country's 242,000 block groups' distribution of home values (owners' estimates) and gross rents, in brackets. A block group's dots are drawn bracket by bracket from its own distribution, so a dot's color is a price for the homes it stands for, not a neighborhood average.</p>
     <ul>
