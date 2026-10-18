@@ -4,13 +4,15 @@ Each dot is an owner-occupied home (colored by its ACS value bin) or a renter-oc
 home (colored by its ACS gross-rent bin). A block group's dots are drawn bin by bin from
 its own distribution (stochastic rounding keeps totals unbiased). Each dot then goes to one
 of the block group's 2020 census blocks, picked in proportion to the block's 2020 housing-unit
-count, and onto a real residential building in that block (FEMA/ORNL USA Structures), picked
-in proportion to the homes the building likely holds: one for a house or manufactured home
-(more for a footprint big enough to be a row of houses), floor area / 95 m^2 for an apartment
-building. Renters lean toward apartment buildings and owners toward houses (UNIT_FIT). A dot
-sits within a few meters of its building's center, so large buildings show as clusters. Blocks
-with no mapped residential building use unclassified structures, and failing those a random
-point in the block.
+count, and onto a real building in that block (FEMA/ORNL USA Structures), picked in proportion to
+the homes the building likely holds: one for a house or manufactured home (more for a footprint
+big enough to be a row of houses), floor area / 95 m^2 for an apartment building. Residential
+buildings take a block's homes first; unclassified structures, then non-residential ones, take
+what the block's 2020 housing count leaves over (in dense cities the source often merges a row of
+houses into one outline labeled by a school or shop in it, and labels mixed-use apartment
+buildings commercial). Renters lean toward apartment buildings and owners toward houses
+(UNIT_FIT). A dot lands at a random spot inside the building's outline, or for a small building
+within a few meters of its center. Blocks with no mapped building get a random point in the block.
 
 Inputs  work/acs.pkl, work/blocks/<state>.zip (TIGER/Line 2024 TABBLOCK20, with HOUSING20),
         work/structs/<state>.npz (tools/fetch_structures.py; optional: without it, random points in blocks)
@@ -23,15 +25,16 @@ from common import WORK, STATES, FINEST, VALUE_EDGES, RENT_EDGES
 
 DOTS = os.path.join(WORK, 'dots')
 # relative pull of each building kind (single-family, multi-family, manufactured, other residential,
-# unclassified) on owner and renter dots: renters still land in houses where a block has no
-# apartments, but prefer apartments where it has both
-UNIT_FIT = {0: np.array([1.0, 0.35, 1.0, 0.7, 0.7]), 1: np.array([0.35, 1.0, 0.6, 0.7, 0.7])}
+# unclassified, non-residential) on owner and renter dots: renters still land in houses where a
+# block has no apartments, but prefer apartments where it has both
+UNIT_FIT = {0: np.array([1.0, 0.35, 1.0, 0.7, 1.0, 0.5]), 1: np.array([0.35, 1.0, 0.6, 0.7, 1.0, 1.0])}
+BIG_UNCLASSIFIED = 400      # m^2
 M_PER_DEG = 111_320.0
 
 
 def load_buildings(st, geoms):
-    """Residential buildings of a state assigned to blocks (indices into `geoms`), with an estimate of
-    the homes each holds. Returns None when the state's structures haven't been downloaded."""
+    """A state's buildings assigned to blocks (indices into `geoms`), with an estimate of the homes
+    each could hold. Returns None when the state's structures haven't been downloaded."""
     path = os.path.join(WORK, 'structs', st + '.npz')
     if not os.path.exists(path):
         return None
@@ -39,25 +42,41 @@ def load_buildings(st, geoms):
     lon, lat, kind, sqm, h = b['lon'], b['lat'], b['kind'], b['sqm'].astype(float), b['height'].astype(float)
     sqm = np.where(np.isfinite(sqm) & (sqm > 0), sqm, 150.0)
     floors = np.where(np.isfinite(h) & (h > 0), np.clip(h / 3.2, 1, 80), 3.0)
-    units = np.where(kind == 1, np.clip(sqm * floors / 95.0, 2, 3000),
+    by_floor_area = (kind == 1) | (kind == 5) | ((kind == 4) & (sqm >= BIG_UNCLASSIFIED))
+    units = np.where(by_floor_area, np.clip(sqm * floors / 95.0, 2, 3000),
                      np.where(kind == 2, 1.0, np.clip(sqm / 300.0, 1, 20)))
-    units = np.where((kind == 4) & (sqm < 40), 0.0, units)          # sheds and specks
+    units = np.where((kind >= 4) & (sqm < 40), 0.0, units)          # sheds and specks
+    # outlines of the large buildings (index into `outlines`, -1 for the rest)
+    outline = np.full(len(lon), -1, np.int64)
+    outlines = None
+    if 'big' in b.files and len(b['big']):
+        outlines = shapely.from_ragged_array(shapely.GeometryType.POLYGON, b['coords'], (b['ring_off'], b['poly_off']))
+        shapely.prepare(outlines)
+        outline[b['big']] = np.arange(len(b['big']))
     tree = shapely.STRtree(geoms)
     pi, bi = tree.query(shapely.points(lon, lat), predicate='within')
     first = np.unique(pi, return_index=True)[1]                    # a point on a shared edge: first block
     pi, bi = pi[first], bi[first]
     o = np.argsort(bi, kind='stable')
-    return dict(block=bi[o], lon=lon[pi][o], lat=lat[pi][o], kind=kind[pi][o], units=units[pi][o],
-                radius=np.clip(np.sqrt(sqm[pi][o] / np.pi), 3.0, 60.0))
+    return dict(block=bi[o], lon=lon[pi][o], lat=lat[pi][o], kind=kind[pi][o], units=units[pi][o], sqm=sqm[pi][o],
+                radius=np.clip(np.sqrt(sqm[pi][o] / np.pi), 3.0, 15.0), outline=outline[pi][o], outlines=outlines)
 
 
-def building_weights(B, tenure, nblocks):
-    """Per-building weight for one tenure (unclassified structures count only in blocks without any
-    residential building), and cumulative sums with per-block start/end."""
-    res = B['kind'] < 4
-    has_res = np.bincount(B['block'][res], minlength=nblocks) > 0
-    w = B['units'] * UNIT_FIT[tenure][B['kind']]
-    w = np.where((B['kind'] == 4) & has_res[B['block']], 0.0, w)
+def building_weights(B, tenure, housing):
+    """Per-building weight for one tenure, and cumulative sums with per-block start/end. Tiers fill a
+    block in turn: residential buildings at full weight, then unclassified structures, then
+    non-residential ones, each scaled to the block's 2020 housing units the tiers before it leave
+    over (full weight when no earlier tier has a building there)."""
+    nblocks = len(housing)
+    tier = np.select([B['kind'] < 4, B['kind'] == 4], [0, 1], 2)
+    filled, seen = np.zeros(nblocks), np.zeros(nblocks, bool)
+    scale = np.ones((3, nblocks))
+    for t in range(3):
+        cap = np.bincount(B['block'][tier == t], weights=B['units'][tier == t], minlength=nblocks)
+        scale[t] = np.where(seen, np.minimum(1.0, np.maximum(housing - filled, 0.0) / np.maximum(cap, 1e-9)), 1.0)
+        filled += cap * scale[t]
+        seen |= cap > 0
+    w = B['units'] * scale[tier, B['block']] * UNIT_FIT[tenure][B['kind']]
     cw = np.cumsum(w)
     start = np.searchsorted(B['block'], np.arange(nblocks)); end = np.searchsorted(B['block'], np.arange(nblocks), 'right')
     tot = np.where(end > start, cw[np.maximum(end - 1, 0)] - np.where(start > 0, cw[np.maximum(start - 1, 0)], 0.0), 0.0)
@@ -107,7 +126,7 @@ def process(st):
     shapely.prepare(geoms)
     bounds = shapely.bounds(geoms)
     B = load_buildings(st, geoms)
-    on_building = 0
+    on_building, on_kind = 0, np.zeros(6, np.int64)
 
     ukeys, bstart, bcount = np.unique(key, return_index=True, return_counts=True)
     pos = pd.Series(np.arange(len(ukeys)), index=ukeys)
@@ -167,7 +186,7 @@ def process(st):
         todo = np.arange(len(blk))
         if B is not None:
             # onto a building of the block, by its homes and fit with this tenure
-            cwb, wst, wen, btot = building_weights(B, tenure, len(geoms))
+            cwb, wst, wen, btot = building_weights(B, tenure, housing)
             on = btot[blk] > 0
             i = np.flatnonzero(on)
             base_b = np.where(wst[blk[i]] > 0, cwb[np.maximum(wst[blk[i]] - 1, 0)], 0.0)
@@ -177,8 +196,22 @@ def process(st):
             rad = B['radius'][j] * np.sqrt(rng.random(len(i)))
             y[i] = B['lat'][j] + rad * np.sin(ang) / M_PER_DEG
             x[i] = B['lon'][j] + rad * np.cos(ang) / (M_PER_DEG * np.cos(np.radians(B['lat'][j])))
+            # large buildings: a uniform spot inside the outline (rejection sampling in its bounds)
+            k = np.flatnonzero(B['outline'][j] >= 0)
+            if len(k):
+                polys = B['outlines'][B['outline'][j[k]]]
+                pb = shapely.bounds(polys)
+                left = np.arange(len(k))
+                for _ in range(40):
+                    if not len(left): break
+                    cx = pb[left, 0] + rng.random(len(left)) * (pb[left, 2] - pb[left, 0])
+                    cy = pb[left, 1] + rng.random(len(left)) * (pb[left, 3] - pb[left, 1])
+                    ok = shapely.contains_xy(polys[left], cx, cy)
+                    x[i[k[left[ok]]]] = cx[ok]; y[i[k[left[ok]]]] = cy[ok]
+                    left = left[~ok]
             todo = np.flatnonzero(~on)
             on_building += int(on.sum())
+            on_kind += np.bincount(B['kind'][j], minlength=6)
         # elsewhere a uniform point in the block polygon, by rejection sampling inside its bounding box
         for _ in range(60):
             if not len(todo): break
@@ -202,7 +235,8 @@ def process(st):
     msg = (f'{st}: {len(a)} bgs, {len(geoms)} blocks, value {stats[0]["units"]:,.0f} homes -> {stats[0]["dots"]:,} dots, '
            f'rent {stats[1]["units"]:,.0f} -> {stats[1]["dots"]:,} dots, lost {missing}, '
            f'fallback {stats[0]["fallback"] + stats[1]["fallback"]}, on buildings '
-           f'{on_building / max(stats[0]["dots"] + stats[1]["dots"], 1):.1%}, {time.time() - t0:.0f}s')
+           f'{on_building / max(stats[0]["dots"] + stats[1]["dots"], 1):.1%} (unclassified '
+           f'{on_kind[4] / max(on_building, 1):.1%}, non-residential {on_kind[5] / max(on_building, 1):.1%}), {time.time() - t0:.0f}s')
     print(msg, flush=True)
     return st, stats, missing
 

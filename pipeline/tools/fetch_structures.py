@@ -1,20 +1,28 @@
 """Download FEMA/ORNL USA Structures (every US building over 450 sq ft, with occupancy class) one state
-at a time and keep what dot placement needs: each residential (or unclassified) building's centroid,
-type, footprint area and height. The downloads are deleted as they are processed.
+at a time and keep what dot placement needs: each building's centroid, type, footprint area and
+height. Non-residential buildings are kept too: in dense cities the source often merges a row of
+houses into one outline and labels it by a school or shop in it, and mixed-use apartment buildings
+are often labeled commercial. The downloads are deleted as they are processed.
 
 Run from pipeline/:   python3 tools/fetch_structures.py [state FIPS ...]
 Output  work/structs/<FIPS>.npz   lon, lat (float64), kind (0 single-family, 1 multi-family,
-                                  2 manufactured, 3 other residential, 4 unclassified),
-                                  sqm (footprint, m^2), height (m, NaN if unknown)
+                                  2 manufactured, 3 other residential, 4 unclassified, 5 non-residential),
+                                  sqm (footprint, m^2), height (m, NaN if unknown); and the outlines
+                                  of buildings of BIG m^2 or more (many are whole rows of attached
+                                  houses, so a dot needs the real shape, not a circle round the
+                                  center): big (row index), coords, ring_off, poly_off (shapely
+                                  ragged-array polygons, lon/lat, simplified to ~50 cm)
 """
 import os, re, sys, glob, time, shutil, zipfile, urllib.parse, urllib.request
-import numpy as np, pyogrio
+import numpy as np, pandas as pd, pyogrio, shapely
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common import WORK, STATES
 
 BUCKET = 'https://fema-femadata.s3.amazonaws.com/'
 PREFIX = 'Partners/ORNL/USA_Structures/'
 OUT = os.path.join(WORK, 'structs')
+BIG = 400            # m^2: footprints at least this large keep their outline
+VERSION = 4
 NAMES = {'01': 'Alabama', '02': 'Alaska', '04': 'Arizona', '05': 'Arkansas', '06': 'California', '08': 'Colorado',
          '09': 'Connecticut', '10': 'Delaware', '11': 'District of Columbia', '12': 'Florida', '13': 'Georgia',
          '15': 'Hawaii', '16': 'Idaho', '17': 'Illinois', '18': 'Indiana', '19': 'Iowa', '20': 'Kansas',
@@ -44,7 +52,7 @@ def pick(rows, name):
 
 def kind_of(occ, prim):
     prim = np.char.lower(prim.astype(str))
-    k = np.full(len(occ), 255, np.uint8)
+    k = np.full(len(occ), 5, np.uint8)
     res = occ == 'Residential'
     k[res] = 3
     k[res & (np.char.find(prim, 'single') >= 0)] = 0
@@ -56,7 +64,7 @@ def kind_of(occ, prim):
 
 def process(st, rows):
     dst = os.path.join(OUT, st + '.npz')
-    if os.path.exists(dst): return f'{st}: cached'
+    if os.path.exists(dst) and int(np.load(dst).get('version', 0)) >= VERSION: return f'{st}: cached'
     key, date, size = pick(rows, NAMES[st])
     tmp = os.path.join(OUT, 'tmp_' + st); os.makedirs(tmp, exist_ok=True)
     zpath = os.path.join(tmp, 'd.zip')
@@ -78,17 +86,34 @@ def process(st, rows):
     os.remove(zpath)
     gdb = [g for g in glob.glob(os.path.join(tmp, '**', '*.gdb'), recursive=True) if '__MACOSX' not in g][0]
     cols = ['OCC_CLS', 'PRIM_OCC', 'SQMETERS', 'HEIGHT', 'LONGITUDE', 'LATITUDE']
-    meta, _, _, arrs = pyogrio.raw.read(gdb, read_geometry=False, columns=cols)
+    meta, fids, _, arrs = pyogrio.raw.read(gdb, read_geometry=False, columns=cols, return_fids=True)
     d = dict(zip(meta['fields'], arrs))          # (fields come back in the file's order)
     k = kind_of(np.asarray(d['OCC_CLS'], dtype=object).astype(str), np.asarray(d['PRIM_OCC'], dtype=object))
-    keep = (k != 255) & np.isfinite(np.asarray(d['LONGITUDE'], float)) & np.isfinite(np.asarray(d['LATITUDE'], float))
+    keep = np.isfinite(np.asarray(d['LONGITUDE'], float)) & np.isfinite(np.asarray(d['LATITUDE'], float))
+    # outlines of the big buildings: largest part, simplified to ~50 cm
+    _, gfids, wkb, _ = pyogrio.raw.read(gdb, columns=['SQMETERS'], return_fids=True,   # (filtered fields must be read)
+                                        where=f"SQMETERS >= {BIG}")
+    parts, owner = shapely.get_parts(shapely.from_wkb(wkb), return_index=True)
+    best = pd.Series(shapely.area(parts)).groupby(owner).idxmax().to_numpy()
+    polys = shapely.simplify(parts[best], 5e-6)
+    gfids = gfids[np.unique(owner)]
+    ok = ~shapely.is_empty(polys) & (shapely.get_type_id(polys) == 3)
+    kept_fids = fids[keep]
+    order = np.argsort(kept_fids)
+    pos = np.searchsorted(kept_fids[order], gfids[ok])
+    pos = np.clip(pos, 0, len(order) - 1)
+    match = kept_fids[order][pos] == gfids[ok]
+    big = order[pos[match]].astype(np.int32)
+    _, coords, (ring_off, poly_off) = shapely.to_ragged_array(polys[ok][match])
     np.savez(dst, lon=np.asarray(d['LONGITUDE'], float)[keep], lat=np.asarray(d['LATITUDE'], float)[keep], kind=k[keep],
              sqm=np.asarray(d['SQMETERS'], np.float32)[keep], height=np.asarray(d['HEIGHT'], np.float32)[keep],
-             version=np.int8(2))
+             big=big, coords=coords, ring_off=ring_off.astype(np.int64), poly_off=poly_off.astype(np.int64),
+             version=np.int8(VERSION))
     shutil.rmtree(tmp)
-    counts = np.bincount(k[keep], minlength=5)
+    counts = np.bincount(k[keep], minlength=6)
     return (f'{st}: {os.path.basename(key)} ({size / 1e9:.1f} GB, {date[:10]}) {keep.sum():,} buildings kept '
-            f'[single {counts[0]:,} multi {counts[1]:,} manuf {counts[2]:,} other {counts[3]:,} unclassified {counts[4]:,}] '
+            f'[single {counts[0]:,} multi {counts[1]:,} manuf {counts[2]:,} other {counts[3]:,} unclassified {counts[4]:,} non-residential {counts[5]:,}; '
+            f'{len(big):,} outlines] '
             f'download {t1 - t0:.0f}s, read {time.time() - t1:.0f}s')
 
 

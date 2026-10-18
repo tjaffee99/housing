@@ -55,13 +55,19 @@ B25103 (property taxes).
 
 1. **Dots.** Each block group's homes are drawn bracket by bracket from its own distribution, one dot
    per 10 homes (stochastic rounding keeps totals unbiased). Each dot goes to one of the block
-   group's 2020 census blocks in proportion to their housing units, then onto a real residential
-   building on that block (FEMA/ORNL USA Structures, 2023), in proportion to the homes it likely
-   holds: one for a house or manufactured home, floor area ÷ 95 m² for an apartment building (height
-   ÷ 3.2 m floors). Renter dots lean toward apartment buildings and owner dots toward houses. Dots sit
-   within the building's footprint-sized circle, so big buildings show as clusters. About 2% of dots,
-   on blocks with no mapped residential building, fall back to a random point in the block. The
-   buildings are real; the price on a given building is not (the Census publishes neighborhood mixes).
+   group's 2020 census blocks in proportion to their housing units, then onto a real building on
+   that block (FEMA/ORNL USA Structures, 2023), in proportion to the homes it likely holds: one for
+   a house or manufactured home, floor area ÷ 95 m² for an apartment building (height ÷ 3.2 m
+   floors). Residential buildings fill a block first; unclassified structures, then non-residential
+   ones, take whatever share of the block's 2020 housing units the residential ones can't hold. (In
+   dense cities the source often merges a row of houses into one outline and labels it by a school
+   or shop in the row, and labels mixed-use apartment buildings commercial; in the suburbs, malls
+   and offices sit on blocks whose houses already account for every home, so they stay empty.)
+   Renter dots lean toward apartment buildings and owner dots toward houses. On a building of 400 m²
+   or more a dot lands anywhere inside its outline, so a rowhouse block fills in along its whole
+   length; on a smaller one, within a few meters of its center. Blocks with no mapped building
+   (under 1% of dots) get a random point in the block. The buildings are real; the price on a given
+   building is not (the Census publishes neighborhood mixes).
 2. **A dollar figure for every dot.** Within a bracket, prices are spread evenly (the Census Bureau's
    own assumption, so area medians match the published ones). Above the top codes:
    - *Homes over $2M* take prices from 2024–2025 HMDA purchase records (owner-occupied one-unit homes
@@ -134,12 +140,12 @@ published. From `pipeline/`:
 ```
 python3 tools/fetch_sources.py --all     # Zillow, FRED (CPI, mortgage rates), Census outlines, ACS tables, HUD
 python3 tools/fetch_hmda.py 2024 2025    # HMDA purchase records (~45 MB after trimming)
-python3 tools/fetch_structures.py        # USA Structures: residential buildings (~45 GB streamed, ~1 GB kept)
+python3 tools/fetch_structures.py        # USA Structures: every building (~45 GB streamed, ~5 GB kept)
 # census blocks: work/blocks/<SS>.zip from
 #   https://www2.census.gov/geo/tiger/TIGER2024/TABBLOCK20/tl_2024_<SS>_tabblock20.zip  (each state + DC + PR)
 
 python3 01_acs.py        # parse ACS tables (1 min)
-python3 02_dots.py       # 13 million dots placed on buildings in census blocks (~15 min on 4 cores)
+PROCS=2 python3 02_dots.py   # 13 million dots placed on buildings (~20 min; ~5 GB of memory per process)
 python3 03_base.py       # reference prices per dot, uncapped; market rents (1 min)
 python3 04_prices.py     # today's prices, monthly costs, area statistics (5 min)
 python3 05_tiles.py      # dot tiles, four modes (2 min)
@@ -156,7 +162,7 @@ Random seeds are fixed, so a rebuild from the same inputs gives the same dots.
 
 `.github/workflows/refresh.yml` runs on the 20th of each month (after Zillow and the BLS publish),
 on every push to `main`, and by hand from the Actions tab. It reads the slow-changing base data
-(dot positions, reference prices, slimmed Census tables, HUD rents; about 215 MB) from the `base`
+(dot positions, reference prices, slimmed Census tables, HUD rents; about 225 MB) from the `base`
 branch, downloads the latest Zillow indexes, CPI and mortgage rate and the Census outlines, runs
 steps 04, 05, 06 and 09, and deploys the site to GitHub Pages. It needs
 **Settings → Pages → Build and deployment → Source: GitHub Actions**; until that is set, the
