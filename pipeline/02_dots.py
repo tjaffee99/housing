@@ -2,11 +2,18 @@
 
 Each dot is an owner-occupied home (colored by its ACS value bin) or a renter-occupied
 home (colored by its ACS gross-rent bin). A block group's dots are drawn bin by bin from
-its own distribution (stochastic rounding keeps totals unbiased), then placed uniformly
-at random inside 2020 census blocks of that block group, picking blocks in proportion to
-their 2020 housing-unit counts (dasymetric placement: no dots in parks, lakes, empty land).
+its own distribution (stochastic rounding keeps totals unbiased). Each dot then goes to one
+of the block group's 2020 census blocks, picked in proportion to the block's 2020 housing-unit
+count, and onto a real residential building in that block (FEMA/ORNL USA Structures), picked
+in proportion to the homes the building likely holds: one for a house or manufactured home
+(more for a footprint big enough to be a row of houses), floor area / 95 m^2 for an apartment
+building. Renters lean toward apartment buildings and owners toward houses (UNIT_FIT). A dot
+sits within a few meters of its building's center, so large buildings show as clusters. Blocks
+with no mapped residential building use unclassified structures, and failing those a random
+point in the block.
 
-Inputs  work/acs.pkl, work/blocks/<state>.zip (TIGER/Line 2024 TABBLOCK20, with HOUSING20)
+Inputs  work/acs.pkl, work/blocks/<state>.zip (TIGER/Line 2024 TABBLOCK20, with HOUSING20),
+        work/structs/<state>.npz (tools/fetch_structures.py; optional: without it, random points in blocks)
 Output  work/dots/<state>.npz
 """
 import os, sys, pickle, time
@@ -15,6 +22,46 @@ import numpy as np, pandas as pd, pyogrio, shapely
 from common import WORK, STATES, FINEST, VALUE_EDGES, RENT_EDGES
 
 DOTS = os.path.join(WORK, 'dots')
+# relative pull of each building kind (single-family, multi-family, manufactured, other residential,
+# unclassified) on owner and renter dots: renters still land in houses where a block has no
+# apartments, but prefer apartments where it has both
+UNIT_FIT = {0: np.array([1.0, 0.35, 1.0, 0.7, 0.7]), 1: np.array([0.35, 1.0, 0.6, 0.7, 0.7])}
+M_PER_DEG = 111_320.0
+
+
+def load_buildings(st, geoms):
+    """Residential buildings of a state assigned to blocks (indices into `geoms`), with an estimate of
+    the homes each holds. Returns None when the state's structures haven't been downloaded."""
+    path = os.path.join(WORK, 'structs', st + '.npz')
+    if not os.path.exists(path):
+        return None
+    b = np.load(path)
+    lon, lat, kind, sqm, h = b['lon'], b['lat'], b['kind'], b['sqm'].astype(float), b['height'].astype(float)
+    sqm = np.where(np.isfinite(sqm) & (sqm > 0), sqm, 150.0)
+    floors = np.where(np.isfinite(h) & (h > 0), np.clip(h / 3.2, 1, 80), 3.0)
+    units = np.where(kind == 1, np.clip(sqm * floors / 95.0, 2, 3000),
+                     np.where(kind == 2, 1.0, np.clip(sqm / 300.0, 1, 20)))
+    units = np.where((kind == 4) & (sqm < 40), 0.0, units)          # sheds and specks
+    tree = shapely.STRtree(geoms)
+    pi, bi = tree.query(shapely.points(lon, lat), predicate='within')
+    first = np.unique(pi, return_index=True)[1]                    # a point on a shared edge: first block
+    pi, bi = pi[first], bi[first]
+    o = np.argsort(bi, kind='stable')
+    return dict(block=bi[o], lon=lon[pi][o], lat=lat[pi][o], kind=kind[pi][o], units=units[pi][o],
+                radius=np.clip(np.sqrt(sqm[pi][o] / np.pi), 3.0, 60.0))
+
+
+def building_weights(B, tenure, nblocks):
+    """Per-building weight for one tenure (unclassified structures count only in blocks without any
+    residential building), and cumulative sums with per-block start/end."""
+    res = B['kind'] < 4
+    has_res = np.bincount(B['block'][res], minlength=nblocks) > 0
+    w = B['units'] * UNIT_FIT[tenure][B['kind']]
+    w = np.where((B['kind'] == 4) & has_res[B['block']], 0.0, w)
+    cw = np.cumsum(w)
+    start = np.searchsorted(B['block'], np.arange(nblocks)); end = np.searchsorted(B['block'], np.arange(nblocks), 'right')
+    tot = np.where(end > start, cw[np.maximum(end - 1, 0)] - np.where(start > 0, cw[np.maximum(start - 1, 0)], 0.0), 0.0)
+    return cw, start, end, tot
 
 def stochastic_round(x, rng):
     fl = np.floor(x)
@@ -59,6 +106,8 @@ def process(st):
     aland = blocks.ALAND20.to_numpy(np.float64)[order]
     shapely.prepare(geoms)
     bounds = shapely.bounds(geoms)
+    B = load_buildings(st, geoms)
+    on_building = 0
 
     ukeys, bstart, bcount = np.unique(key, return_index=True, return_counts=True)
     pos = pd.Series(np.arange(len(ukeys)), index=ukeys)
@@ -114,9 +163,23 @@ def process(st):
                 while j < s[i] + c[i] - 1 and w[j] <= 0: j += 1
                 blk[i] = j
 
-        # uniform point in block polygon by rejection sampling inside its bounding box
         x = np.empty(len(blk)); y = np.empty(len(blk))
         todo = np.arange(len(blk))
+        if B is not None:
+            # onto a building of the block, by its homes and fit with this tenure
+            cwb, wst, wen, btot = building_weights(B, tenure, len(geoms))
+            on = btot[blk] > 0
+            i = np.flatnonzero(on)
+            base_b = np.where(wst[blk[i]] > 0, cwb[np.maximum(wst[blk[i]] - 1, 0)], 0.0)
+            j = np.searchsorted(cwb, base_b + rng.random(len(i)) * btot[blk[i]], side='right')
+            j = np.clip(j, wst[blk[i]], wen[blk[i]] - 1)
+            ang = rng.random(len(i)) * 2 * np.pi
+            rad = B['radius'][j] * np.sqrt(rng.random(len(i)))
+            y[i] = B['lat'][j] + rad * np.sin(ang) / M_PER_DEG
+            x[i] = B['lon'][j] + rad * np.cos(ang) / (M_PER_DEG * np.cos(np.radians(B['lat'][j])))
+            todo = np.flatnonzero(~on)
+            on_building += int(on.sum())
+        # elsewhere a uniform point in the block polygon, by rejection sampling inside its bounding box
         for _ in range(60):
             if not len(todo): break
             bb = bounds[blk[todo]]
@@ -138,7 +201,8 @@ def process(st):
              b=np.concatenate(bs), m=np.concatenate(ms), u=np.concatenate(us), g=np.concatenate(gs))
     msg = (f'{st}: {len(a)} bgs, {len(geoms)} blocks, value {stats[0]["units"]:,.0f} homes -> {stats[0]["dots"]:,} dots, '
            f'rent {stats[1]["units"]:,.0f} -> {stats[1]["dots"]:,} dots, lost {missing}, '
-           f'fallback {stats[0]["fallback"] + stats[1]["fallback"]}, {time.time() - t0:.0f}s')
+           f'fallback {stats[0]["fallback"] + stats[1]["fallback"]}, on buildings '
+           f'{on_building / max(stats[0]["dots"] + stats[1]["dots"], 1):.1%}, {time.time() - t0:.0f}s')
     print(msg, flush=True)
     return st, stats, missing
 

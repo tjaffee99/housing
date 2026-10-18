@@ -54,8 +54,14 @@ tracts and ZIP codes, B25113 (median rent by year moved in), B25031 (median rent
 B25103 (property taxes).
 
 1. **Dots.** Each block group's homes are drawn bracket by bracket from its own distribution, one dot
-   per 10 homes (stochastic rounding keeps totals unbiased), and placed at random in its 2020 census
-   blocks in proportion to their housing units, so dots fall where homes are.
+   per 10 homes (stochastic rounding keeps totals unbiased). Each dot goes to one of the block
+   group's 2020 census blocks in proportion to their housing units, then onto a real residential
+   building on that block (FEMA/ORNL USA Structures, 2023), in proportion to the homes it likely
+   holds: one for a house or manufactured home, floor area ÷ 95 m² for an apartment building (height
+   ÷ 3.2 m floors). Renter dots lean toward apartment buildings and owner dots toward houses. Dots sit
+   within the building's footprint-sized circle, so big buildings show as clusters. About 2% of dots,
+   on blocks with no mapped residential building, fall back to a random point in the block. The
+   buildings are real; the price on a given building is not (the Census publishes neighborhood mixes).
 2. **A dollar figure for every dot.** Within a bracket, prices are spread evenly (the Census Bureau's
    own assumption, so area medians match the published ones). Above the top codes:
    - *Homes over $2M* take prices from 2024–2025 HMDA purchase records (owner-occupied one-unit homes
@@ -108,7 +114,11 @@ that `app.js` routes requests to (GitHub's per-file limit is 100 MB).
 
 ## Run locally
 
-PMTiles needs HTTP range requests, which `python3 -m http.server` does not support. Use, e.g.:
+The generated tiles and statistics (`data/dots`, `data/areas`, `data/summary.json`,
+`data/manifest.json`) are not committed: the refresh workflow builds them for each deploy. To run
+the site locally, build them (see below; with the `base` branch's kit, steps 04–06 and 09 are
+enough) or download the latest Pages artifact from the Actions tab into `data/`. PMTiles needs HTTP
+range requests, which `python3 -m http.server` does not support. Use, e.g.:
 
 ```
 npx http-server . -p 8000     # then open http://localhost:8000
@@ -124,11 +134,12 @@ published. From `pipeline/`:
 ```
 python3 tools/fetch_sources.py --all     # Zillow, FRED (CPI, mortgage rates), Census outlines, ACS tables, HUD
 python3 tools/fetch_hmda.py 2024 2025    # HMDA purchase records (~45 MB after trimming)
+python3 tools/fetch_structures.py        # USA Structures: residential buildings (~45 GB streamed, ~1 GB kept)
 # census blocks: work/blocks/<SS>.zip from
 #   https://www2.census.gov/geo/tiger/TIGER2024/TABBLOCK20/tl_2024_<SS>_tabblock20.zip  (each state + DC + PR)
 
 python3 01_acs.py        # parse ACS tables (1 min)
-python3 02_dots.py       # 13 million dots placed in census blocks (~10 min on 4 cores)
+python3 02_dots.py       # 13 million dots placed on buildings in census blocks (~15 min on 4 cores)
 python3 03_base.py       # reference prices per dot, uncapped; market rents (1 min)
 python3 04_prices.py     # today's prices, monthly costs, area statistics (5 min)
 python3 05_tiles.py      # dot tiles, four modes (2 min)
@@ -170,6 +181,6 @@ Vercel, S3/R2): serve the repository root with no build command.
 
 US Census Bureau (ACS 2020–2024, TIGER/Line, cartographic boundaries; public domain). Zillow Research:
 ZHVI and ZORI (free to use with attribution). HUD Fair Market Rents FY2027. CFPB/FFIEC HMDA
-2024–2025. Freddie Mac PMMS and BLS CPI via FRED. MapLibre GL JS (BSD-3-Clause,
+2024–2025. Freddie Mac PMMS and BLS CPI via FRED. FEMA/ORNL USA Structures (public domain). MapLibre GL JS (BSD-3-Clause,
 `vendor/MAPLIBRE-LICENSE.txt`), PMTiles (BSD-3-Clause). Base map © OpenStreetMap contributors
 (ODbL), tiles by OpenFreeMap (OpenMapTiles schema).

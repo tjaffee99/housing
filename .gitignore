@@ -1,0 +1,5 @@
+# built by the refresh workflow (.github/workflows/refresh.yml) for every deploy
+data/dots/
+data/areas/
+data/summary.json
+data/manifest.json
