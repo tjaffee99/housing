@@ -8,19 +8,14 @@ const SMALL_Q = '(max-width: 720px), (max-height: 500px) and (pointer: coarse)';
 const small = () => matchMedia(SMALL_Q).matches;
 
 // ---------------------------------------------------------------- palettes
-// Sequential, monotone in lightness (dark -> light = cheap -> expensive) for a dark base
-// map, with the darkest step still about 4:1 against the land color. Generated in OKLCH;
-// "cvd" keeps to the blue-yellow axis that survives protanopia and deuteranopia.
-// 15 steps for home values, 14 for rents and monthly costs (which share one scale).
+// Prices read like a heat map: cheap is cool (blue, green), the typical home yellow, expensive warm
+// (orange, red), and the very top runs on through magenta to violet, with the biggest color steps
+// among the expensive classes so pricey neighborhoods separate. Every step is at least 3:1 against
+// the land color. "cvd" keeps to the blue-yellow axis that survives protanopia and deuteranopia,
+// rising steadily in lightness. 15 steps for home values and for rents and monthly costs.
 const PALETTES = {
-  heat: {
-    15: ['#2378c2', '#4674d3', '#656edf', '#8167e5', '#9d5fe5', '#bb59d8', '#d653c3', '#ed50a7', '#f86594', '#fc7b87', '#fc9182', '#feac85', '#fec590', '#ffdda0', '#fff4b2'],
-    14: ['#2378c2', '#4973d4', '#696de0', '#8866e6', '#a65de3', '#c656d1', '#e151b7', '#f35b9c', '#fb728b', '#fd8a83', '#fea582', '#fec28e', '#ffdb9e', '#fff4b2'],
-  },
-  cvd: {
-    15: ['#426ec2', '#2e7cc5', '#0b89c5', '#0295bf', '#0d9fba', '#03aab6', '#10b6ac', '#03c49d', '#3acf84', '#6bd66e', '#91dd5c', '#b4e345', '#d2e844', '#e9ee5b', '#fef473'],
-    14: ['#426ec2', '#2c7dc5', '#018bc5', '#1197bd', '#11a2b8', '#04afb2', '#17bca7', '#10cb90', '#5cd374', '#86db62', '#ace24b', '#cee740', '#e8ed59', '#fef473'],
-  },
+  heat: ['#2d86c8', '#139fb9', '#00b4a9', '#07c78d', '#73d268', '#b5dd52', '#e6e14b', '#ffd359', '#feb255', '#fe8e4a', '#ff6241', '#fa3950', '#f3247b', '#d652d3', '#d1b3ff'],
+  cvd: ['#4c73ba', '#407fc0', '#308bc4', '#1a97c5', '#07a3c0', '#02aeb9', '#15bab0', '#2cc69d', '#5ece83', '#88d66e', '#b1dc56', '#d7e148', '#f9e647', '#fff19c', '#fffbe2'],
 };
 const NO_CASH = '#7b808a';
 
@@ -167,7 +162,7 @@ function areaWhere(level, id, props) {
 const labels = (k = ckey()) => M.classes[k].labels;
 const edges = (k = ckey()) => M.classes[k].edges;
 function colors(k = ckey()) {
-  const ramp = PALETTES[S.pal][k === 'v' ? 15 : 14];
+  const ramp = PALETTES[S.pal];
   return k === 'p' ? [...ramp, NO_CASH] : ramp;
 }
 // legend rows in the current view ("No cash rent" only for paid-rent dots)

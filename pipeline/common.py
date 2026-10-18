@@ -36,8 +36,9 @@ NO_CASH_RENT = 24
 # Display classes (what the legend and colors use): lower edges in current dollars, last class open.
 VALUE_CLASSES = [0, 100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 750_000, 1_000_000,
                  1_500_000, 2_000_000, 3_000_000, 5_000_000, 10_000_000]
-# rents and monthly costs share one scale, so a color means the same monthly outlay in every mode
-MONTHLY_CLASSES = [0, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7500, 10_000, 20_000]
+# rents and monthly costs share one scale, so a color means the same monthly outlay in every mode;
+# the breaks get finer at the top so expensive neighborhoods ($5K vs $8K vs $15K a month) separate
+MONTHLY_CLASSES = [0, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 6500, 8000, 10_000, 15_000, 25_000]
 NO_CASH_CLASS = len(MONTHLY_CLASSES)          # paid-rent mode: renters who pay no cash rent
 
 # Buying today (monthly cost mode): 20% down, 30-year fixed at the latest Freddie Mac rate,
