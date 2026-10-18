@@ -1,13 +1,24 @@
 # US Housing Prices, Dot by Dot
 
-An interactive dot density map of what American homes are worth and what they rent for.
-Intended to be served at <https://housing.theojaffee.net>.
+An interactive dot density map of what American homes are worth, what they rent for and what they
+cost a month, in current dollars. Served at <https://housing.theojaffee.net>.
 
-Every occupied home in the 50 states, DC and Puerto Rico is on the map: 85 million
-owner-occupied homes colored by value and 45 million rented homes colored by monthly gross
-rent. Zoomed in, one dot is 10 homes; zoomed out, a dot stands for 25, 64, 160 or 400.
+Every occupied home in the 50 states, DC and Puerto Rico is on the map: 85 million owner-occupied
+homes and 45 million rented ones. Zoomed in, one dot is 10 homes; zoomed out, a dot stands for 25,
+64, 160 or 400. Prices have no upper limit (the Census Bureau's own figures stop at $2 million and
+$3,500 a month).
 
-A fully static site: no build step, no API keys, no server code.
+- **Home values**: owner-occupied homes by what they are worth today.
+- **Rents**: rented homes by *market rent* (what the home would rent for if it were listed today) or by
+  *what tenants pay* (including long-held and rent-regulated leases).
+- **Monthly cost**: every home on one monthly scale: owner-occupied homes by what buying them today
+  would cost (20% down, 30-year fixed at the latest Freddie Mac rate, property tax, insurance),
+  rented homes by market rent. *Buying* and *Renting* show each group alone.
+- **Size** (Studio … 4 bd): ZIP codes colored by the typical price of a home with that many
+  bedrooms (Zillow values, HUD Fair Market Rents, Census rents paid).
+- **Area medians** (Display options): counties, tracts or block groups colored by their median.
+
+A fully static site: no build step for the page, no API keys, no server code.
 
 ```
 index.html            page shell
@@ -15,40 +26,72 @@ style.css             UI styles
 app.js                map style, tile routing, legend, hover/click details, search
 favicon.svg
 vendor/               MapLibre GL JS 5.24.0 and PMTiles 4.5.0 (self-hosted)
-data/manifest.json    tiers, price classes and file index the app loads first
-data/summary.json     US / state / county statistics and county names
+data/manifest.json    tiers, price classes, vintages and the file index the app loads first
+data/summary.json     US, state and county statistics and names (loaded once the map is idle)
 data/search.json      states, counties, places and ZIP codes for the search box
-data/mask.json        world-minus-US polygons that dim the rest of the base map
-data/us.json          coarse US outline (foreign place names are drawn dimmer)
-data/dots/t<N><v|r>*.pmtiles  the dots: five nested zoom tiers, home values (v) and rents (r)
-data/areas/*.pmtiles  county, tract and block-group outlines with headline stats
-data/areas/NNNNN.json full stats and price distributions for each county's tracts and block groups
-pipeline/             Python scripts that build data/ from Census downloads
+data/mask.json        world-minus-US polygons that dim the rest of the base map and its place names
+data/dots/t<N><v|p|m|c>.pmtiles   the dots: five nested zoom tiers × value, rent paid, market rent, monthly cost
+data/areas/{c,t,b,z}.pmtiles      county, tract, block-group and ZIP outlines with headline medians
+data/areas/NNNNN.json full statistics and price distributions for each county's tracts and block groups
+pipeline/             Python scripts that build data/ (see below)
+.github/workflows/refresh.yml     monthly repricing and deployment
 CNAME                 housing.theojaffee.net
 ```
 
 The base map (roads, water, place names) streams from [OpenFreeMap](https://openfreemap.org),
-which is free and needs no key. Map position and mode are kept in the URL
-(`#value/11.00/40.7300/-73.9600`, `#rent-areas/...`), so links are shareable.
+which is free and needs no key. Map position and mode are kept in the URL (`#value/11.00/40.7300/-73.9600`,
+`#rent-paid-areas/...`, `#cost-buying/...`, `#rent-2bd/...`), so links are shareable.
 
 Keyboard: `/` focuses search; with the map focused, arrow keys pan, `+`/`-` zoom and Enter opens
 the area under the crosshair; Escape closes the details panel.
 
-## What's on the map
+## How the prices are made
 
-- **Data:** US Census Bureau, American Community Survey 2020–2024 5-year estimates, block-group
-  level: B25075 (value of owner-occupied homes, 26 brackets), B25063 (gross rent, 24 brackets +
-  no cash rent), B25077/B25064 (medians), B25003 (tenure), B19013 (household income), B25071
-  (rent as a share of income), B25001/B25002 (housing units, vacancy). 2024 dollars.
-- **Dot colors:** each block group's dots are drawn bracket by bracket from its own distribution
-  (with stochastic rounding, so totals are unbiased), so a dot's color is the price bracket of the
-  homes it stands for. *Display options → Area medians* colors counties, tracts or block groups
-  by their median instead.
-- **Dot positions:** random points inside the block group's 2020 census blocks (TIGER/Line
-  TABBLOCK20), picking blocks in proportion to their 2020 housing-unit count, so dots fall where
-  homes are. Positions are not the locations of real homes.
-- **Zoom tiers:** the coarser tiers are random subsets of the finest one (stratified within each
-  block group), so zooming in only adds dots; tiers cross-fade at their boundaries.
+The base is the Census Bureau's American Community Survey, 2020–2024 5-year estimates, for every
+block group: B25075 (home value, 26 brackets), B25063 (gross rent, 24 brackets + no cash rent),
+B25003 (tenure), B19013 (income), B25071 (rent burden), B25001/B25002 (units, vacancy), plus, for
+tracts and ZIP codes, B25113 (median rent by year moved in), B25031 (median rent by bedrooms) and
+B25103 (property taxes).
+
+1. **Dots.** Each block group's homes are drawn bracket by bracket from its own distribution, one dot
+   per 10 homes (stochastic rounding keeps totals unbiased), and placed at random in its 2020 census
+   blocks in proportion to their housing units, so dots fall where homes are.
+2. **A dollar figure for every dot.** Within a bracket, prices are spread evenly (the Census Bureau's
+   own assumption, so area medians match the published ones). Above the top codes:
+   - *Homes over $2M* take prices from 2024–2025 HMDA purchase records (owner-occupied one-unit homes
+     over $2M, restated on the survey's basis with the county's top-tier ZHVI) in the same tract,
+     blended with a pool of tracts with a similar share of $2M+ homes in the same county (else state,
+     else nation) when the tract has few sales.
+   - *Rents over $3,500* follow a Pareto tail fitted to each tract's $2,500–3,000, $3,000–3,500 and
+     $3,500+ brackets, shrunk toward its county, state and the nation.
+3. **Today's prices.** Values move from the survey years to the latest month with the Zillow Home Value
+   Index for the dot's ZIP code (county, state or national where Zillow has no ZIP series): the
+   mid-tier index for homes below the ZIP's typical mid-tier home, the top-tier index above its
+   typical top-tier home, a log-linear blend between. Rents tenants pay move with the regional CPI
+   for rent. In ZIP codes where most homes are over $2M, the excess over the top code is scaled so
+   the ZIP's median matches Zillow's typical value (relative to ZIPs the survey fully describes).
+4. **Market rents.** In each tract, households that moved in since 2023 pay M times the tract's overall
+   median (B25113; estimated by empirical Bayes, since most tract-to-tract spread in the published
+   figures is sampling noise). A rental's market rent is its rent times M^(2(1−q)), q its rank among
+   the tract's rents: the cheapest, longest-held homes gain the most, the dearest nothing. These are
+   restated with Zillow's Observed Rent Index (ZORI), and where ZORI covers a ZIP code, market rents
+   are raised (through the same rank-weighted uplift, at most 1.6×) until the ZIP's median reaches
+   ZORI. ZORI excludes utilities, so it is a floor, not a target.
+5. **Monthly cost.** Owners: what buying the home today would cost a month: 20% down, 30-year fixed at the
+   latest Freddie Mac weekly rate, property tax at the tract's effective rate (median tax ÷ median
+   value; at least 1.1% in California, where a sale resets the tax base), insurance 0.5% of value a
+   year. Renters: market rent.
+6. **Sizes.** ZIP codes: Zillow's ZHVI by bedroom count, HUD's Small Area Fair Market Rents (county FMRs
+   outside metro areas), the Census median rent paid by bedrooms (in today's dollars), and the
+   monthly cost of buying Zillow's typical home of each size.
+
+Area statistics (medians and class shares for every block group, tract, county, state, ZIP code and
+the nation) come from the same distributions, integrated exactly rather than from the dots.
+
+**Known gaps.** The 2024 ACS release has no rows for 39 block groups in Suffolk County, NY (most of
+Brentwood and Wyandanch); `01_acs.py` gives them the county total minus the published block groups,
+split by 2020 housing units, and flags them as estimates. Prices far above the top codes are
+modeled; block-group figures have wide margins of error.
 
 | tier | 1 dot = | shown at zoom | tiles stored at |
 |------|---------|---------------|-----------------|
@@ -58,68 +101,75 @@ the area under the crosshair; Escape closes the details panel.
 | t4   | 25 homes  | 10–12 | z9 |
 | t5   | 10 homes  | 12+   | z11 |
 
-Value and rent dots are separate archives, so only the mode on screen downloads. Large
-archives are split into tile-column shards (under 20 MB each) so every file fits any static
-host's per-file limit; `app.js` routes each tile request to its shard.
-- **Gaps in the source:** the 2024 ACS release has no rows for 39 block groups in Suffolk
-  County, NY (most of Brentwood and Wyandanch). `01_acs.py` gives them the county total minus the
-  published block groups, split by 2020 housing units, and flags them as estimates.
+The coarser tiers are random subsets of the finest one (stratified within each block group), so
+zooming in only adds dots; tiers cross-fade at their boundaries. Each mode is a separate archive set,
+so only the mode on screen downloads, and any archive over 45 MB is split into tile-column shards
+that `app.js` routes requests to (GitHub's per-file limit is 100 MB).
 
 ## Run locally
 
 PMTiles needs HTTP range requests, which `python3 -m http.server` does not support. Use, e.g.:
 
 ```
-npx http-server housing -p 8000     # then open http://localhost:8000
+npx http-server . -p 8000     # then open http://localhost:8000
 ```
 
 ## Rebuilding the data
 
-Needs Python 3.11+ with `numpy pandas geopandas pyogrio shapely pmtiles`, and
+Needs Python 3.11+ with `numpy pandas geopandas pyogrio shapely pmtiles openpyxl`, and
 [tippecanoe](https://github.com/felt/tippecanoe) on the PATH (or `TIPPECANOE=/path/to/tippecanoe`).
-Downloads (~10 GB, mostly census blocks) go in `pipeline/work/` (or `$HOUSING_WORK`), which is
-not published:
+Downloads (~12 GB, mostly census blocks) go in `pipeline/work/` (or `$HOUSING_WORK`), which is not
+published. From `pipeline/`:
 
 ```
-work/acs/<table>.dat    https://www2.census.gov/programs-surveys/acs/summary_file/2024/table-based-SF/data/5YRData/acsdt5y2024-<table>.dat
-                        for b25075 b25063 b25077 b25064 b25003 b25071 b19013 b25001 b25002
-work/blocks/<SS>.zip    https://www2.census.gov/geo/tiger/TIGER2024/TABBLOCK20/tl_2024_<SS>_tabblock20.zip  (each state + DC + PR)
-work/geo/cb_bg.zip      https://www2.census.gov/geo/tiger/GENZ2024/shp/cb_2024_us_bg_500k.zip
-work/geo/cb_tract.zip   .../cb_2024_us_tract_500k.zip
-work/geo/cb_county.zip  .../cb_2024_us_county_500k.zip
-work/geo/cb_state.zip   .../cb_2024_us_state_500k.zip
-work/geo/cb_nation.zip  .../cb_2024_us_nation_5m.zip
-work/geo/cb_place.zip   .../cb_2024_us_place_500k.zip
-work/geo/cb_zcta.zip    https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip
-```
+python3 tools/fetch_sources.py --all     # Zillow, FRED (CPI, mortgage rates), Census outlines, ACS tables, HUD
+python3 tools/fetch_hmda.py 2024 2025    # HMDA purchase records (~45 MB after trimming)
+# census blocks: work/blocks/<SS>.zip from
+#   https://www2.census.gov/geo/tiger/TIGER2024/TABBLOCK20/tl_2024_<SS>_tabblock20.zip  (each state + DC + PR)
 
-Then, from `pipeline/`:
-
-```
-python3 01_acs.py        # parse ACS tables (20 s)
-python3 02_dots.py       # 13 million dots, placed in census blocks (~10 min on 4 cores)
-python3 03_tiles.py      # dot tiers -> data/dots (~1 min)
-python3 04_areas.py      # outlines, detail files, search index (~8 min)
-python3 05_mask.py       # data/mask.json, data/us.json
-python3 06_manifest.py   # data/manifest.json
+python3 01_acs.py        # parse ACS tables (1 min)
+python3 02_dots.py       # 13 million dots placed in census blocks (~10 min on 4 cores)
+python3 03_base.py       # reference prices per dot, uncapped; market rents (1 min)
+python3 04_prices.py     # today's prices, monthly costs, area statistics (5 min)
+python3 05_tiles.py      # dot tiles, four modes (2 min)
+python3 06_areas.py      # outlines, detail files, summary (8 min)
+python3 07_search.py     # search index (3 min)
+python3 08_mask.py       # data/mask.json
+python3 09_manifest.py   # data/manifest.json
+python3 tools/kit.py pack ../../kit    # base data for the monthly refresh (see below)
 ```
 
 Random seeds are fixed, so a rebuild from the same inputs gives the same dots.
 
+## Monthly refresh
+
+`.github/workflows/refresh.yml` runs on the 20th of each month (after Zillow and the BLS publish),
+on every push to `main`, and by hand from the Actions tab. It reads the slow-changing base data
+(dot positions, reference prices, slimmed Census tables, HUD rents; about 215 MB) from the `base`
+branch, downloads the latest Zillow indexes, CPI and mortgage rate and the Census outlines, runs
+steps 04, 05, 06 and 09, and deploys the site to GitHub Pages. It needs
+**Settings → Pages → Build and deployment → Source: GitHub Actions**; until that is set, the
+workflow builds and skips the deploy, and Pages keeps serving `main` as committed.
+
+After a new ACS release (each December), rerun the full build and push a new kit to `base`:
+
+```
+python3 tools/kit.py pack ../../kit
+cd ../../kit && git init -b base && git add -A && git commit -m "Base data" &&
+  git push -f https://github.com/<you>/housing base
+```
+
 ## Deploying on the subdomain
 
-GitHub Pages allows one custom domain per repository, so to serve this folder at
-`housing.theojaffee.net`:
+GitHub Pages allows one custom domain per repository; this repository's `CNAME` is
+`housing.theojaffee.net`, with a DNS record `CNAME housing → tjaffee99.github.io` and "Enforce HTTPS"
+on. Any other static host that supports HTTP range requests works too (Cloudflare Pages, Netlify,
+Vercel, S3/R2): serve the repository root with no build command.
 
-1. Put the contents of this folder at the root of its own repository (e.g. `tjaffee99/housing`),
-   keeping the `CNAME` file, and enable Pages for it (Settings → Pages → deploy from branch).
-   `pipeline/` can stay or go; the site doesn't use it.
-2. Add a DNS record: `CNAME  housing  →  tjaffee99.github.io`.
-3. Once the certificate is issued, tick "Enforce HTTPS".
+## Sources and licenses
 
-Any other static host that supports HTTP range requests works too (Cloudflare Pages, Netlify,
-Vercel, S3/R2): point it at this folder with no build command. Every data file is under 20 MB.
-
-Licenses: MapLibre GL JS (BSD-3-Clause, `vendor/MAPLIBRE-LICENSE.txt`), PMTiles (BSD-3-Clause).
-Census data is public domain. Base map © OpenStreetMap contributors (ODbL), tiles by OpenFreeMap
-(OpenMapTiles schema).
+US Census Bureau (ACS 2020–2024, TIGER/Line, cartographic boundaries; public domain). Zillow Research:
+ZHVI and ZORI (free to use with attribution). HUD Fair Market Rents FY2027. CFPB/FFIEC HMDA
+2024–2025. Freddie Mac PMMS and BLS CPI via FRED. MapLibre GL JS (BSD-3-Clause,
+`vendor/MAPLIBRE-LICENSE.txt`), PMTiles (BSD-3-Clause). Base map © OpenStreetMap contributors
+(ODbL), tiles by OpenFreeMap (OpenMapTiles schema).

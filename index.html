@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>US Housing Prices, Dot by Dot</title>
-<meta name="description" content="An interactive dot density map of what American homes are worth and what they rent for: 130 million homes, one dot per 10, colored by price, from the Census Bureau's 2020–2024 American Community Survey.">
+<meta name="description" content="An interactive dot density map of what American homes are worth, what they rent for and what they cost a month, in today's dollars: 130 million homes, one dot per 10, colored by price.">
 <meta name="theme-color" content="#0d0f13">
 <meta property="og:title" content="US Housing Prices, Dot by Dot">
-<meta property="og:description" content="Every owner-occupied and rented home in America on one map, colored by home value or rent.">
+<meta property="og:description" content="Every owner-occupied and rented home in America on one map, colored by today's home value, market rent or monthly cost.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://housing.theojaffee.net/">
 <meta name="twitter:card" content="summary">
@@ -39,6 +39,28 @@
     <div class="seg" role="radiogroup" aria-label="What to show" id="modeSeg">
       <button role="radio" data-mode="value" aria-checked="true">Home values</button>
       <button role="radio" data-mode="rent" aria-checked="false">Rents</button>
+      <button role="radio" data-mode="cost" aria-checked="false">Monthly cost</button>
+    </div>
+    <div class="seg small sub" role="radiogroup" aria-label="Which rents" id="rentSeg" hidden>
+      <button role="radio" data-rent="market" aria-checked="true">Market rent</button>
+      <button role="radio" data-rent="paid" aria-checked="false">What tenants pay</button>
+    </div>
+    <div class="seg small sub" role="radiogroup" aria-label="Whose homes" id="whoSeg" hidden>
+      <button role="radio" data-who="all" aria-checked="true">Everyone</button>
+      <button role="radio" data-who="owners" aria-checked="false">Buying</button>
+      <button role="radio" data-who="renters" aria-checked="false">Renting</button>
+    </div>
+    <p class="mnote" id="modeNote" aria-live="polite"></p>
+    <div class="sizes">
+      <span class="olabel" id="sizeLabel">Size</span>
+      <div class="seg small" role="radiogroup" aria-labelledby="sizeLabel" id="sizeSeg">
+        <button role="radio" data-size="all" aria-checked="true">All</button>
+        <button role="radio" data-size="0" aria-checked="false">Studio</button>
+        <button role="radio" data-size="1" aria-checked="false" aria-label="1 bd, 1 bedroom">1 bd</button>
+        <button role="radio" data-size="2" aria-checked="false" aria-label="2 bd, 2 bedrooms">2 bd</button>
+        <button role="radio" data-size="3" aria-checked="false" aria-label="3 bd, 3 bedrooms">3 bd</button>
+        <button role="radio" data-size="4" aria-checked="false" aria-label="4 bd, 4 bedrooms">4 bd</button>
+      </div>
     </div>
 
     <div class="legend" id="legend" role="group" aria-describedby="legendHint"></div>
@@ -69,11 +91,11 @@
     <footer class="pfoot">
       <button class="link" id="aboutBtn">About this map</button>
       <span class="sep">·</span>
-      <span id="vintage">ACS 2020–2024</span>
+      <span id="vintage">Prices as of 2026</span>
     </footer>
   </aside>
 
-  <aside id="detail" aria-label="Area details" aria-live="polite" hidden>
+  <aside id="detail" aria-label="Area details" hidden>
     <button class="close" id="detailClose" aria-label="Close details">
       <svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
     </button>
@@ -94,7 +116,7 @@
     <button data-jump="ak">Alaska</button><button data-jump="hi">Hawaii</button><button data-jump="pr">Puerto Rico</button>
   </div>
 
-  <div class="attr"><a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">Census ACS</a> · <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener"><span class="wide">OpenStreetMap</span><span class="narrow">OSM</span></a></div>
+  <div class="attr"><a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">Census</a> · <a href="https://www.zillow.com/research/data/" target="_blank" rel="noopener">Zillow</a> · <a href="https://www.huduser.gov/portal/datasets/fmr.html" target="_blank" rel="noopener">HUD</a> · <a href="https://ffiec.cfpb.gov/" target="_blank" rel="noopener">HMDA</a> · <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener"><span class="wide">OpenStreetMap</span><span class="narrow">OSM</span></a></div>
 
   <div id="busy" aria-hidden="true"><i></i></div>
 
@@ -103,21 +125,32 @@
       <svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
     </button>
     <h2 id="aboutTitle">About this map</h2>
-    <p>Every occupied home in the United States and Puerto Rico is on this map: about 85 million owner-occupied homes, colored by what their owners say they are worth, and 45 million rented homes, colored by monthly gross rent (rent plus utilities). Zoomed in, each dot is <strong>10 homes</strong>; zoomed out, each dot stands for more (the panel shows how many).</p>
+    <p>Every occupied home in the United States and Puerto Rico is on this map: about 85 million owner-occupied homes and 45 million rented ones. Zoomed in, each dot is <strong>10 homes</strong>; zoomed out, each dot stands for more (the panel shows how many). All prices are in <strong id="aboutMonth">current</strong> dollars, with no upper limit.</p>
     <p>Hover or tap anywhere for the area's numbers; click for details. From the keyboard, focus the map, move with the arrow keys and press Enter to open the area under the crosshair.</p>
+    <h3>Three ways to look at prices</h3>
+    <ul>
+      <li><strong>Home values</strong>: owner-occupied homes, by what they are worth today.</li>
+      <li><strong>Rents</strong>: rented homes, either by <em>market rent</em>, what the home would rent for if it were listed today, or by <em>what tenants pay</em>, which includes long-held and rent-regulated leases (in much of New York or San Francisco the two differ by thousands of dollars a month). Rents include utilities.</li>
+      <li><strong>Monthly cost</strong>: every home on one scale. Owner-occupied homes show what buying that home today would cost a month (<span id="aboutTerms">20% down, a 30-year fixed mortgage at today's average rate</span>, property tax and insurance); rented homes show their market rent. It sets places where most people rent (Lower Manhattan) beside places where nearly everyone owns (Atherton). <em>Buying</em> and <em>Renting</em> show each group on its own.</li>
+    </ul>
+    <p><strong>Size</strong> switches to ZIP codes colored by the typical price of a home with that many bedrooms: Zillow's home values by bedroom count, HUD's Fair Market Rents (what a recent mover pays at the 40th percentile), and the Census median rent paid.</p>
     <h3>Where the numbers come from</h3>
-    <p>Prices are from the US Census Bureau's <a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">American Community Survey</a> 5-year estimates for 2020–2024 (tables B25075 home value and B25063 gross rent), in 2024 dollars, for each of the country's 242,000 census block groups. A block group's dots are drawn from its own price distribution, so a dot's color is the price bracket of the homes it stands for, not a neighborhood average. Switch <em>Display options → Area medians</em> to see medians instead.</p>
+    <p>The base is the Census Bureau's <a href="https://www.census.gov/programs-surveys/acs" target="_blank" rel="noopener">American Community Survey</a>, 2020–2024: each of the country's 242,000 block groups' distribution of home values (owners' estimates) and gross rents, in brackets. A block group's dots are drawn bracket by bracket from its own distribution, so a dot's color is a price for the homes it stands for, not a neighborhood average.</p>
+    <ul>
+      <li><strong>Today's prices.</strong> Values are moved from the survey years to today with the <a href="https://www.zillow.com/research/data/" target="_blank" rel="noopener">Zillow Home Value Index</a> for the home's ZIP code (its top-tier index for expensive homes); rents tenants pay, with the regional CPI for rent.</li>
+      <li><strong>No top code.</strong> The Census stops at "$2 million or more" and "$3,500 or more". Homes above $2M get prices from 2024–2025 mortgage records (<a href="https://ffiec.cfpb.gov/" target="_blank" rel="noopener">HMDA</a>) for purchases of $2M+ homes in the same tract, blended with similar tracts where sales are few; where most homes are over $2M, the ZIP code's typical value is matched to Zillow's. Rents above $3,500 follow a Pareto tail fitted to each tract's upper brackets.</li>
+      <li><strong>Market rents.</strong> In each tract, households who moved in since 2023 pay more than the typical renter (Census table B25113); the cheapest, longest-held rentals are raised the most and the priciest not at all. Where Zillow observes asking rents for a ZIP code (ZORI), market rents are raised to at least that level.</li>
+    </ul>
     <h3>Where the dots go</h3>
-    <p>Dots are placed at random inside the block group's 2020 census blocks, in proportion to how many housing units each block had in the 2020 Census, so they land where homes are and not in parks, lakes or empty land. A dot's exact position is not the location of any real home.</p>
+    <p>Dots are placed at random inside the block group's 2020 census blocks, in proportion to how many housing units each block had, so they land where homes are and not in parks, lakes or empty land. A dot's exact position is not the location of any real home.</p>
     <h3>Things to know</h3>
     <ul>
-      <li>Home values are owners' own estimates, not sale prices, and the survey's 5-year window ends in 2024; prices in hot markets have moved since.</li>
-      <li>The Census Bureau caps its brackets at $2 million+ for value and $3,500+ for rent.</li>
-      <li>Block-group estimates come from small samples and have wide margins of error. Tract and county figures are more reliable.</li>
-      <li>Vacant homes (for sale, for rent, seasonal) are not shown. Renter homes with no cash rent are shown in gray.</li>
+      <li>Home values are owners' own estimates, adjusted to today; they are not sale prices.</li>
+      <li>Block-group estimates come from small samples and have wide margins of error. Tract and county figures are more reliable, and prices far above $2M or $3,500 are modeled, not measured.</li>
+      <li>Vacant homes (for sale, for rent, seasonal) are not shown. Renter homes with no cash rent are gray under <em>What tenants pay</em>.</li>
       <li>The 2024 release has no figures for 39 block groups in Suffolk County, NY (most of Brentwood and Wyandanch). Their homes are placed using the county total minus the published block groups.</li>
     </ul>
-    <p class="credit">Made by <a href="https://theojaffee.net" target="_blank" rel="noopener">Theo Jaffee</a>. Base map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors, © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>, via <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>; rendering by <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre</a> and <a href="https://protomaps.com/docs/pmtiles" target="_blank" rel="noopener">PMTiles</a>. <span id="builtNote"></span></p>
+    <p class="credit">Made by <a href="https://theojaffee.net" target="_blank" rel="noopener">Theo Jaffee</a>. Data: US Census Bureau; Zillow Research (ZHVI, ZORI); HUD; CFPB/FFIEC HMDA; Freddie Mac and BLS via FRED. Base map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors, © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>, via <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>; rendering by <a href="https://maplibre.org" target="_blank" rel="noopener">MapLibre</a> and <a href="https://protomaps.com/docs/pmtiles" target="_blank" rel="noopener">PMTiles</a>. <span id="builtNote"></span></p>
   </dialog>
 
   <div id="loading" role="status"><div><span>Loading map…</span><span class="bar" aria-hidden="true"><i></i></span></div></div>

@@ -2,13 +2,17 @@
 
 Inputs  work/acs/<table>.dat   (www2.census.gov/programs-surveys/acs/summary_file/2024/table-based-SF/data/5YRData/)
         work/blocks/<SS>.zip   (only for counties whose block groups don't add up; see synthesize_missing)
-Output  work/acs.pkl           dict level -> DataFrame indexed by GEOID (state/county/tract/bg/us)
+Output  work/acs.pkl           dict level -> DataFrame indexed by GEOID (us/state/county/tract/bg/zcta)
+
+B25113 (rent by year moved in), B25031 (rent by bedrooms) and B25103 (property taxes) are not
+published for block groups; their columns are empty at that level.
 """
 import os, pickle
 import numpy as np, pandas as pd, pyogrio
 from common import WORK, STATES
 
-LEVELS = {'0100000US': 'us', '0400000US': 'state', '0500000US': 'county', '1400000US': 'tract', '1500000US': 'bg'}
+LEVELS = {'0100000US': 'us', '0400000US': 'state', '0500000US': 'county', '1400000US': 'tract', '1500000US': 'bg',
+          '860Z200US': 'zcta'}
 
 def read(table, cols):
     df = pd.read_csv(os.path.join(WORK, 'acs', table + '.dat'), sep='|', dtype=str, usecols=['GEO_ID'] + cols)
@@ -22,7 +26,8 @@ def read(table, cols):
 def E(t, i): return f'{t}_E{i:03d}'
 def M(t, i): return f'{t}_M{i:03d}'
 
-MEDIANS = ['med_value', 'med_rent', 'med_income', 'rent_burden']
+MEDIANS = (['med_value', 'med_rent', 'med_income', 'rent_burden', 'med_tax']
+           + [f'rm_{k}' for k in ('all', '2023', '2020', '2010', '2000', '1990', '1989')] + [f'rb{k}' for k in range(6)])
 
 def synthesize_missing(out):
     """Fill block groups the ACS release omits (it has no rows for 39 Suffolk County, NY block groups,
@@ -82,6 +87,15 @@ def main():
     ten = read('b25003', [E('B25003', i) for i in (1, 2, 3)]); ten.columns = ['households', 'owners', 'renters']; parts.append(ten)
     hu = read('b25001', [E('B25001', 1)]); hu.columns = ['units']; parts.append(hu)
     occ = read('b25002', [E('B25002', 3)]); occ.columns = ['vacant']; parts.append(occ)
+    # median gross rent by year the householder moved in: all, 2023+, 2020-22, 2010-19, 2000-09, 1990-99, before 1990
+    mv = read('b25113', [c for i in range(1, 8) for c in (E('B25113', i), M('B25113', i))])
+    mv.columns = [c for k in ('all', '2023', '2020', '2010', '2000', '1990', '1989') for c in (f'rm_{k}', f'rm_{k}_moe')]
+    parts.append(mv)
+    # median gross rent by bedrooms: all, studio, 1, 2, 3, 4, 5+
+    bd = read('b25031', [c for i in range(2, 8) for c in (E('B25031', i), M('B25031', i))])
+    bd.columns = [c for k in range(6) for c in (f'rb{k}', f'rb{k}_moe')]
+    parts.append(bd)
+    tax = read('b25103', [E('B25103', 1)]); tax.columns = ['med_tax']; parts.append(tax)
     df = pd.concat(parts, axis=1)
     # ACS annotation codes (-666666666 etc.) are stored as large negative numbers: treat as missing.
     df = df.mask(df < 0)
@@ -89,6 +103,7 @@ def main():
     out['state'] = out['state'][out['state'].index.isin(STATES)]
     for lvl in ('county', 'tract', 'bg'):
         out[lvl] = out[lvl][out[lvl].index.str[:2].isin(STATES)]
+    out['zcta'] = out['zcta'][out['zcta'].households.notna()]
     synthesize_missing(out)
     for lvl, d in out.items():
         print(f'{lvl:7s} {len(d):7d} rows   owners={d.owners.sum():,.0f}  renters={d.renters.sum():,.0f}  '

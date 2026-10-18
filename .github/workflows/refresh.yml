@@ -1,0 +1,95 @@
+# Monthly price refresh: restate every dot and area at the latest Zillow, CPI and mortgage-rate
+# figures and deploy the site to GitHub Pages. The heavy, slow-changing inputs (dot positions,
+# reference prices, Census tables) come from the `base` branch (pipeline/tools/kit.py); everything
+# else is downloaded fresh. Runs on the 20th (Zillow and the BLS publish mid-month), by hand from
+# the Actions tab, and on every push to main so code changes go out with current prices.
+#
+# Deploys only once Settings -> Pages -> Build and deployment -> Source is "GitHub Actions";
+# until then the job builds and skips the deploy step.
+name: Refresh prices
+
+on:
+  schedule:
+    - cron: '17 9 20 * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      deploy: ${{ steps.pages.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: base
+          path: kit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python packages
+        run: pip install numpy pandas geopandas pyogrio shapely pmtiles openpyxl
+      - name: Install tippecanoe
+        run: |
+          sudo apt-get update -q
+          if ! sudo apt-get install -y -q tippecanoe; then
+            sudo apt-get install -y -q build-essential libsqlite3-dev zlib1g-dev
+            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+            make -C /tmp/tippecanoe -j4 && sudo make -C /tmp/tippecanoe install
+          fi
+          tippecanoe --version
+      - name: Unpack base data, download this month's indexes
+        working-directory: pipeline
+        run: |
+          python3 tools/kit.py unpack ../kit
+          python3 tools/fetch_sources.py --geo
+      - name: Reprice and rebuild tiles
+        working-directory: pipeline
+        run: |
+          python3 04_prices.py
+          python3 05_tiles.py
+          python3 06_areas.py
+          python3 09_manifest.py
+      - name: Assemble site
+        run: |
+          mkdir -p _site/data
+          cp -r index.html style.css app.js favicon.svg CNAME vendor _site/
+          cp -r data/dots data/areas data/*.json _site/data/
+          du -sh _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Check the Pages source
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          src=$(gh api "repos/${{ github.repository }}/pages" --jq .build_type || echo none)
+          echo "Pages build type: $src"
+          if [ "$src" = workflow ]; then echo deploy=true >> "$GITHUB_OUTPUT"; else
+            echo "::notice::Built, not deployed: set Settings > Pages > Source to GitHub Actions to publish from this workflow."
+            echo deploy=false >> "$GITHUB_OUTPUT"; fi
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

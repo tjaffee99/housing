@@ -11,37 +11,65 @@ const small = () => matchMedia(SMALL_Q).matches;
 // Sequential, monotone in lightness (dark -> light = cheap -> expensive) for a dark base
 // map, with the darkest step still about 4:1 against the land color. Generated in OKLCH;
 // "cvd" keeps to the blue-yellow axis that survives protanopia and deuteranopia.
-// 12 steps for home values, 10 for rents.
+// 15 steps for home values, 14 for rents and monthly costs (which share one scale).
 const PALETTES = {
   heat: {
-    12: ['#1a79c2', '#5274da', '#7f6ce8', '#a964e6', '#cf5ed5', '#f05aba', '#fe729b', '#fe918d', '#ffab89', '#ffc492', '#fedda3', '#fff4b1'],
-    10: ['#1a79c2', '#5c72de', '#9267ea', '#c260dc', '#ec5bbd', '#fe7699', '#fd9b8c', '#feb98e', '#fed79f', '#fff4b1'],
+    15: ['#2378c2', '#4674d3', '#656edf', '#8167e5', '#9d5fe5', '#bb59d8', '#d653c3', '#ed50a7', '#f86594', '#fc7b87', '#fc9182', '#feac85', '#fec590', '#ffdda0', '#fff4b2'],
+    14: ['#2378c2', '#4973d4', '#696de0', '#8866e6', '#a65de3', '#c656d1', '#e151b7', '#f35b9c', '#fb728b', '#fd8a83', '#fea582', '#fec28e', '#ffdb9e', '#fff4b2'],
   },
   cvd: {
-    12: ['#3e6dc8', '#1b7ec9', '#118cbf', '#0899b8', '#06a8b2', '#10b7a8', '#18c794', '#60d37d', '#96da5f', '#c7e03e', '#e9e83c', '#fff19b'],
-    10: ['#3e6dc8', '#0b81c9', '#1192bb', '#0ea2b4', '#07b6a9', '#25c992', '#73d673', '#b3dd4a', '#e2e63c', '#fff19b'],
+    15: ['#426ec2', '#2e7cc5', '#0b89c5', '#0295bf', '#0d9fba', '#03aab6', '#10b6ac', '#03c49d', '#3acf84', '#6bd66e', '#91dd5c', '#b4e345', '#d2e844', '#e9ee5b', '#fef473'],
+    14: ['#426ec2', '#2c7dc5', '#018bc5', '#1197bd', '#11a2b8', '#04afb2', '#17bca7', '#10cb90', '#5cd374', '#86db62', '#ace24b', '#cee740', '#e8ed59', '#fef473'],
   },
 };
 const NO_CASH = '#7b808a';
 
 // ---------------------------------------------------------------- state
 const S = {
-  mode: 'value',            // 'value' | 'rent'
+  mode: 'value',            // 'value' | 'rent' | 'cost'
+  rent: 'market',           // rents: 'market' (if let today) | 'paid' (what tenants pay)
+  who: 'all',               // monthly cost: 'all' | 'owners' (buying) | 'renters'
+  size: 'all',              // 'all' or bedrooms '0'..'4': ZIP codes by typical price for that size
   view: 'dots',             // 'dots' | 'areas'
   pal: 'heat',
   labels: true,
-  hidden: { value: new Set(), rent: new Set() },   // hidden class indices
-  sel: null,                // { level: 'c'|'t'|'b'|'s'|'us', id, origin: {level, id} }
+  hidden: { v: new Set(), p: new Set(), m: new Set(), c: new Set() },   // hidden class indices
+  sel: null,                // { level: 'c'|'t'|'b'|'s'|'us'|'z', id, props, origin: {level, id, lngLat} }
 };
 let M = null;               // manifest
-let SUM = null;             // summary.json (loads in the background)
-let US_SHAPE = null;        // coarse US outline, for dimming foreign place names
+let SUM = null;             // summary.json (fetched once the map is idle, or when first needed)
 let map = null;
 let hitReady = false;       // area hit-test tiles are deferred until the dots have drawn
 const FADE = 0.6;           // zoom range over which dot tiers cross-fade
-const sumP = fetch('data/summary.json').then(r => { if (!r.ok) throw new Error('summary ' + r.status); return r.json(); })
-  .then(d => { SUM = d; return d; });
-sumP.catch(() => {});
+const RENTER = 16;          // class offset of renters in the monthly-cost tiles (pipeline/05_tiles.py)
+let sumP = null;
+function loadSummary() {
+  if (!sumP) {
+    sumP = fetch('data/summary.json').then(r => { if (!r.ok) throw new Error('summary ' + r.status); return r.json(); })
+      .then(d => { SUM = d; return d; });
+    sumP.catch(() => { sumP = null; });
+  }
+  return sumP;
+}
+
+// Datasets: v home values (owners), p rent paid and m market rent (renters), c monthly cost (everyone).
+const DKEYS = ['v', 'p', 'm', 'c'];
+const dkey = () => S.mode === 'value' ? 'v' : S.mode === 'rent' ? (S.rent === 'paid' ? 'p' : 'm') : 'c';
+const sizeView = () => S.size !== 'all';
+// ZIP property shown in the size view: v<b> Zillow value, m<b> HUD market rent, p<b> ACS rent paid, c<b> cost to buy
+function sizeField() {
+  const b = S.size;
+  if (S.mode === 'value') return 'v' + b;
+  if (S.mode === 'rent') return (S.rent === 'paid' ? 'p' : 'm') + b;
+  return (S.who === 'renters' ? 'm' : 'c') + b;
+}
+// Zillow publishes no studio home values
+const sizeAvailable = (b, mode = S.mode, who = S.who) => b !== '0' || mode === 'rent' || (mode === 'cost' && who === 'renters');
+// class scale in use (legend, colors, hidden classes): 'v' value classes, else monthly classes ('p' adds
+// "No cash rent"). The size view shares its dataset's scale, so hidden ranges carry across views.
+const ckey = () => dkey();
+// median property colored in the county / tract / block-group view
+function areaField() { return S.mode === 'cost' ? (S.who === 'owners' ? 'co' : S.who === 'renters' ? 'm' : 'c') : dkey(); }
 
 // ---------------------------------------------------------------- tile archives
 // Dots and area outlines are PMTiles archives, some split into column shards to keep every
@@ -58,7 +86,7 @@ function shardFor(shards, maxzoom, z, x) {
 // Buffers are transferred to the worker (and detached), so every response needs a fresh one.
 const empty = () => ({ data: new ArrayBuffer(0) });
 maplibregl.addProtocol('hp', async (params, abort) => {
-  // hp://dots/<tier>/<value|rent>/z/x/y   or   hp://areas/<set>/z/x/y
+  // hp://dots/<tier>/<v|p|m|c>/z/x/y   or   hp://areas/<set>/z/x/y
   const m = params.url.match(/^hp:\/\/(dots\/\w+\/\w+|areas\/\w+)\/(\d+)\/(\d+)\/(\d+)/);
   if (!m) return empty();
   const [, path, z, x, y] = m;
@@ -78,33 +106,14 @@ maplibregl.addProtocol('hp', async (params, abort) => {
 });
 
 // ---------------------------------------------------------------- formatting
-// ACS publishes some medians as codes: top codes (value 2,000,001 = "$2M+", rent 3,501,
-// income 250,001, rent burden 51 = "50%+") and bottom codes (value 9,999 = "under $10K",
-// rent 99, income 2,499, rent burden 9 = "10% or less").
-const TOP = { value: 2000001, rent: 3501, income: 250001 };
-const BOTTOM = { value: 9999, rent: 99, income: 2499 };
-const isTop = (v, kind) => v != null && v >= TOP[kind];
-const isBottom = (v, kind) => v != null && v <= BOTTOM[kind];
-function money(v, kind) {
+function money(v) {
   if (v == null || !isFinite(v)) return '—';
-  if (kind === 'rent') {
-    if (isTop(v, kind)) return '$3,500+';
-    if (isBottom(v, kind)) return 'Under $100';
-    return '$' + Math.round(v).toLocaleString('en-US');
-  }
-  if (isTop(v, kind)) return kind === 'income' ? '$250K+' : '$2M+';
-  if (isBottom(v, kind)) return kind === 'income' ? 'Under $2,500' : 'Under $10K';
-  if (v >= 999500) return '$' + (v / 1e6).toFixed(v >= 1e7 ? 0 : 2).replace(/\.?0+$/, '') + 'M';
-  if (v >= 1e4) return '$' + Math.round(v / 1e3) + 'K';
-  return '$' + Math.round(v).toLocaleString('en-US');
-}
-// plain dollar amounts (margins of error): no top/bottom-code wording
-function dollars(v) {
-  if (v == null || !isFinite(v)) return '';
+  if (v >= 9995000) return '$' + (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
   if (v >= 999500) return '$' + (v / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
   if (v >= 1e4) return '$' + Math.round(v / 1e3) + 'K';
   return '$' + Math.round(v).toLocaleString('en-US');
 }
+const monthly = v => v == null || !isFinite(v) ? '—' : '$' + Math.round(v).toLocaleString('en-US');
 function burden(b) {
   if (b == null) return '—';
   if (b >= 50.05) return '50%+';
@@ -113,6 +122,18 @@ function burden(b) {
 }
 const n0 = v => v == null ? '—' : Math.round(v).toLocaleString('en-US');
 const pct = (a, b) => b > 0 ? Math.round(100 * a / b) + '%' : '—';
+const times = (a, b) => a > 0 && b > 0 ? (a / b).toFixed(1) + '×' : '—';
+function monthName(ym) {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  return y && m ? new Date(Date.UTC(y, m - 1, 15)).toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
+}
+function dayName(d) {
+  const t = new Date(d + 'T12:00:00Z');
+  return isNaN(t) ? d : t.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+const rateTxt = () => (100 * M.vintage.mortgage_rate).toFixed(2) + '%';
+const sizeName = b => b === '0' ? 'studio' : `${b}-bedroom`;
+const sizeShort = b => b === '0' ? 'Studio' : `${b} bd`;
 function tractName(id) {
   const t = id.slice(5, 11);
   const main = String(parseInt(t.slice(0, 4), 10)), suf = t.slice(4);
@@ -122,7 +143,7 @@ const stateRow = id => SUM && SUM.state[id.slice(0, 2)];
 function stateAbbr(id) { const s = stateRow(id); return s ? s[0] : ''; }
 function stateName(id) { const s = stateRow(id); return s ? s[1] : ''; }
 function countyName(id) {
-  const c = SUM && SUM.county[id.slice(0, 5)];
+  const c = id && SUM && SUM.county[id.slice(0, 5)];
   return c ? c[0] + ', ' + stateAbbr(id) : '';
 }
 function areaTitle(level, id) {
@@ -130,65 +151,66 @@ function areaTitle(level, id) {
   if (level === 's') return stateName(id) || 'State';
   if (level === 'c') return countyName(id) || 'County';
   if (level === 't') return tractName(id);
+  if (level === 'z') return 'ZIP code ' + id;
   return 'Block group ' + id.slice(11);
 }
-function areaWhere(level, id) {
+function areaWhere(level, id, props) {
   if (level === 'b') return tractName(id) + (countyName(id) ? ' · ' + countyName(id) : '');
   if (level === 't') return countyName(id);
   if (level === 'c') return stateName(id);
   if (level === 's') return 'State';
+  if (level === 'z') return props && props.cn ? (countyName(props.cn) ? 'Mostly in ' + countyName(props.cn) : '') : '';
   return '';
 }
 
 // ---------------------------------------------------------------- classes & colors
-function classes(mode = S.mode) { return M[mode].classes; }      // [label, lo, hi]
-// legend rows shown in the current view ("No cash rent" has no median color)
-function shownClasses(mode = S.mode) {
-  return classes(mode).map((c, i) => i).filter(i => !(S.view === 'areas' && classes(mode)[i][0] === 'No cash rent'));
+const labels = (k = ckey()) => M.classes[k].labels;
+const edges = (k = ckey()) => M.classes[k].edges;
+function colors(k = ckey()) {
+  const ramp = PALETTES[S.pal][k === 'v' ? 15 : 14];
+  return k === 'p' ? [...ramp, NO_CASH] : ramp;
 }
-function colors(mode = S.mode) {
-  const cls = classes(mode);
-  const priced = cls.filter(c => c[0] !== 'No cash rent').length;
-  const ramp = PALETTES[S.pal][priced];
-  return cls.map((c, i) => c[0] === 'No cash rent' ? NO_CASH : ramp[i]);
+// legend rows in the current view ("No cash rent" only for paid-rent dots)
+function shownClasses(k = ckey()) {
+  const n = labels(k).length;
+  const noCash = k === 'p' && (S.view === 'areas' || sizeView());
+  return [...Array(n).keys()].filter(i => !(noCash && i === n - 1));
 }
-// MapLibre expression: ACS bin -> class color
-function dotColorExpr(mode) {
-  const cls = classes(mode), col = colors(mode), expr = ['match', ['get', 'b']];
-  cls.forEach(([, lo, hi], i) => { const bins = []; for (let b = lo; b <= hi; b++) bins.push(b); expr.push(bins, col[i]); });
+function classOf(k, v) {
+  if (v == null || !isFinite(v)) return -1;
+  const e = edges(k); let c = 0;
+  for (let i = 0; i < e.length; i++) if (v >= e[i]) c = i;
+  return c;
+}
+// MapLibre expressions: dot class -> color, and which classes are drawn
+function dotColorExpr(k) {
+  const expr = ['match', ['get', 'k']];
+  colors(k).forEach((c, i) => expr.push(k === 'c' ? [i, i + RENTER] : i, c));
   expr.push('#000');
   return expr;
 }
-function visibleBins(mode) {
-  const out = [];
-  classes(mode).forEach(([, lo, hi], i) => { if (!S.hidden[mode].has(i)) for (let b = lo; b <= hi; b++) out.push(b); });
-  return out;
+function visibleKs(k) {
+  const hid = S.hidden[k];
+  const ks = [...labels(k).keys()].filter(i => !hid.has(i));
+  if (k !== 'c') return ks;
+  return [...(S.who !== 'renters' ? ks : []), ...(S.who !== 'owners' ? ks.map(i => i + RENTER) : [])];
 }
-// lower dollar edge of each class, for coloring medians
-function classEdges(mode) { return classes(mode).filter(c => c[0] !== 'No cash rent').map(c => M[mode].edges[c[1]]); }
-function classOf(mode, v) {
-  if (v == null || !isFinite(v)) return -1;
-  const e = classEdges(mode); let k = 0;
-  for (let i = 0; i < e.length; i++) if (v >= e[i]) k = i;
-  return k;
-}
-function areaColorExpr(mode) {
-  const field = mode === 'value' ? 'v' : 'g', e = classEdges(mode), col = colors(mode);
+function stepExpr(field, k, none) {
+  const e = edges(k), col = colors(k);
   const step = ['step', ['to-number', ['get', field]], col[0]];
   for (let i = 1; i < e.length; i++) step.push(e[i], col[i]);
-  return ['case', ['has', field], step, 'rgba(0,0,0,0)'];
+  return ['case', ['has', field], step, none];
 }
-function areaFilter(mode) {
-  const field = mode === 'value' ? 'v' : 'g';
-  if (!S.hidden[mode].size) return ['has', 'id'];
-  const e = classEdges(mode), conds = ['any'];
+function classFilter(field, k, keepMissing) {
+  const hid = S.hidden[k];
+  if (!hid.size) return keepMissing ? ['has', 'id'] : ['has', field];
+  const e = edges(k), conds = ['any'];
   e.forEach((lo, i) => {
-    if (S.hidden[mode].has(i)) return;
-    const hi = e[i + 1];
-    conds.push(hi == null ? ['>=', ['to-number', ['get', field]], lo]
-      : ['all', ['>=', ['to-number', ['get', field]], lo], ['<', ['to-number', ['get', field]], hi]]);
+    if (hid.has(i)) return;
+    const hi = e[i + 1], v = ['to-number', ['get', field]];
+    conds.push(hi == null ? ['>=', v, lo] : ['all', ['>=', v, lo], ['<', v, hi]]);
   });
-  return ['all', ['has', field], conds];
+  return keepMissing ? ['any', ['!', ['has', field]], ['all', ['has', field], conds]] : ['all', ['has', field], conds];
 }
 
 // ---------------------------------------------------------------- base map style (OpenFreeMap / OpenMapTiles)
@@ -224,18 +246,18 @@ function baseLayers() {
     paint: { 'line-color': P.bnd2, 'line-width': W([[2, 0.7], [8, 1.4]]) } });
   return L;
 }
-// Place names inside the US draw at full strength above the mask; names elsewhere are dimmed.
-// The split needs data/us.json, which loads in the background (see splitLabels).
+// Place names draw under the mask, which dims the ones outside the US (it covers only foreign
+// land and open sea), so no per-label geometry test is needed.
 function labelLayers() {
-  const B = { source: 'base' };
+  const B = { source: 'base', type: 'symbol' };
   const vis = S.labels ? 'visible' : 'none';
   const font = ['Noto Sans Regular'], bold = ['Noto Sans Bold'];
   const halo = { 'text-halo-color': P.halo, 'text-halo-width': 1.4, 'text-halo-blur': 0.4 };
-  const defs = [
+  return [
     { id: 'lbl-water', 'source-layer': 'water_name', minzoom: 3, filter: ['==', ['geometry-type'], 'Point'],
-      layout: { 'text-field': NAME, 'text-font': ['Noto Sans Italic'], 'text-size': W([[3, 10], [10, 13]]), 'text-max-width': 6, 'text-letter-spacing': 0.08 },
+      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[3, 10], [10, 13]]), 'text-max-width': 6, 'text-letter-spacing': 0.08 },
       paint: { 'text-color': P.waterLabel, ...halo } },
-    { id: 'lbl-road', 'source-layer': 'transportation_name', minzoom: 13, split: false,
+    { id: 'lbl-road', 'source-layer': 'transportation_name', minzoom: 13,
       layout: { 'symbol-placement': 'line', 'text-field': NAME, 'text-font': font, 'text-size': W([[13, 10], [17, 13]]), 'text-max-angle': 30 },
       paint: { 'text-color': P.label2, ...halo } },
     { id: 'lbl-place-minor', 'source-layer': 'place', minzoom: 10, filter: ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter', 'hamlet', 'village']]],
@@ -251,24 +273,7 @@ function labelLayers() {
     { id: 'lbl-state', 'source-layer': 'place', minzoom: 3.2, maxzoom: 7, filter: ['==', ['get', 'class'], 'state'],
       layout: { 'text-field': NAME, 'text-font': bold, 'text-size': W([[3, 9.5], [6, 13]]), 'text-transform': 'uppercase', 'text-letter-spacing': 0.14, 'text-max-width': 8 },
       paint: { 'text-color': '#7d8390', ...halo } },
-  ];
-  const out = [];
-  for (const d of defs) {
-    const { split, ...rest } = d;
-    const base = { ...B, type: 'symbol', ...rest, layout: { ...rest.layout, visibility: vis } };
-    out.push(base);
-    if (!US_SHAPE || split === false) continue;
-    const inUS = ['within', US_SHAPE];
-    base.filter = d.filter ? ['all', d.filter, inUS] : inUS;
-    out.push({ ...base, id: d.id + '-far', filter: d.filter ? ['all', d.filter, ['!', inUS]] : ['!', inUS], paint: { ...d.paint, 'text-opacity': 0.4 }, _below: true });
-  }
-  return out;
-}
-function splitLabels() {
-  for (const l of labelLayers()) {
-    if (l._below) { const { _below, ...far } = l; if (!map.getLayer(far.id)) map.addLayer(far, 'mask'); }
-    else if (map.getLayer(l.id) && l.filter) map.setFilter(l.id, l.filter);
-  }
+  ].map(d => ({ ...B, ...d, layout: { ...d.layout, visibility: vis } }));
 }
 
 // ---------------------------------------------------------------- data layers
@@ -293,6 +298,7 @@ function tierRadius(t, last) {
   });
   return ['interpolate', ['linear'], ['zoom'], ...stops];
 }
+const dotVisible = k => S.view === 'dots' && !sizeView() && dkey() === k;
 function dotLayers() {
   const L = [];
   const last = M.tiers.length - 1;
@@ -300,16 +306,16 @@ function dotLayers() {
     const [s, e] = t.show;
     const stops = i === 0 ? [0, 1] : [s, 0, s + FADE, 1];
     if (i !== last) stops.push(e, 1, e + FADE, 0);
-    ['value', 'rent'].forEach(mode => {
+    DKEYS.forEach(k => {
       L.push({
-        id: `dot-${t.name}-${mode}`, type: 'circle', source: `d-${t.name}-${mode}`, 'source-layer': mode === 'value' ? 'v' : 'r',
+        id: `dot-${t.name}-${k}`, type: 'circle', source: `d-${t.name}-${k}`, 'source-layer': k,
         minzoom: i === 0 ? 0 : s, maxzoom: i === last ? 24 : e + FADE,
-        filter: ['in', ['get', 'b'], ['literal', visibleBins(mode)]],
-        layout: { visibility: S.view === 'dots' && S.mode === mode ? 'visible' : 'none' },
+        filter: ['in', ['get', 'k'], ['literal', visibleKs(k)]],
+        layout: { visibility: dotVisible(k) ? 'visible' : 'none' },
         paint: {
-          'circle-color': dotColorExpr(mode),
+          'circle-color': dotColorExpr(k),
           'circle-radius': tierRadius(t, i === last),
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], ...stops.map((v, k) => k % 2 ? v * 0.92 : v)],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], ...stops.map((v, n) => n % 2 ? v * 0.92 : v)],
           'circle-pitch-alignment': 'map',
         },
       });
@@ -322,23 +328,36 @@ const LEVELS = [   // area outline layers: county below z8, tract 8-10, block gr
   { key: 't', set: 'tract', minzoom: 8, maxzoom: 10 },
   { key: 'b', set: 'bg', minzoom: 10, maxzoom: 24 },
 ];
-const levelOf = k => LEVELS.find(l => l.key === k);
+const ZIPL = { key: 'z', set: 'zcta', minzoom: 0, maxzoom: 24 };     // size view
+const AREAS = [...LEVELS, ZIPL];
+const levelOf = k => AREAS.find(l => l.key === k);
 const hitVisible = () => S.view === 'areas' || hitReady;
+const areasOn = () => S.view === 'areas' && !sizeView();
+function layerVis(l) { return (l.key === 'z' ? sizeView() : !sizeView() && hitVisible()) ? 'visible' : 'none'; }
+function fillPaint(l) {
+  if (l.key === 'z') return sizeView() ? stepExpr(sizeField(), ckey(), 'rgba(255,255,255,0.05)') : '#000';
+  return areasOn() ? stepExpr(areaField(), dkey(), 'rgba(0,0,0,0)') : '#000';
+}
+function fillFilter(l) {
+  if (l.key === 'z') return sizeView() ? classFilter(sizeField(), ckey(), true) : ['has', 'id'];
+  return areasOn() ? classFilter(areaField(), dkey(), true) : ['has', 'id'];     // areas without a median stay clickable
+}
+const fillOpacity = l => (l.key === 'z' ? sizeView() : areasOn()) ? 0.88 : 0;
 function areaFillLayers() {
-  return LEVELS.map(l => ({
+  return AREAS.map(l => ({
     id: `af-${l.key}`, type: 'fill', source: `a-${l.key}`, 'source-layer': M.areas[l.set].layer, minzoom: l.minzoom, maxzoom: l.maxzoom,
-    filter: S.view === 'areas' ? areaFilter(S.mode) : ['has', 'id'],
-    layout: { visibility: hitVisible() ? 'visible' : 'none' },
-    paint: { 'fill-color': S.view === 'areas' ? areaColorExpr(S.mode) : '#000', 'fill-opacity': S.view === 'areas' ? 0.88 : 0, 'fill-antialias': false },
+    filter: fillFilter(l), layout: { visibility: layerVis(l) },
+    paint: { 'fill-color': fillPaint(l), 'fill-opacity': fillOpacity(l), 'fill-antialias': false },
   }));
 }
 function areaLineLayers() {
   const L = [];
-  for (const l of LEVELS) {
+  for (const l of AREAS) {
     const base = { source: `a-${l.key}`, 'source-layer': M.areas[l.set].layer, minzoom: l.minzoom, maxzoom: l.maxzoom, layout: { 'line-join': 'round' } };
-    L.push({ ...base, id: `ao-${l.key}`, type: 'line', layout: { ...base.layout, visibility: S.view === 'areas' ? 'visible' : 'none' },
+    const outline = l.key === 'z' ? sizeView() : areasOn();
+    L.push({ ...base, id: `ao-${l.key}`, type: 'line', layout: { ...base.layout, visibility: outline ? 'visible' : 'none' },
       paint: { 'line-color': 'rgba(10,12,16,0.55)', 'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.2, 10, 0.6, 14, 1] } });
-    const hl = { ...base.layout, visibility: hitVisible() ? 'visible' : 'none' };
+    const hl = { ...base.layout, visibility: layerVis(l) };
     L.push({ ...base, id: `ah-${l.key}`, type: 'line', filter: ['==', ['get', 'id'], ''], layout: hl,
       paint: { 'line-color': 'rgba(255,255,255,0.85)', 'line-width': 1.3 } });
     L.push({ ...base, id: `as-case-${l.key}`, type: 'line', filter: ['==', ['get', 'id'], ''], layout: hl,
@@ -353,111 +372,173 @@ function buildStyle() {
     base: { type: 'vector', url: OFM + '/planet' },
     mask: { type: 'geojson', data: 'data/mask.json' },
   };
-  M.tiers.forEach(t => ['value', 'rent'].forEach(mode => {
-    sources[`d-${t.name}-${mode}`] = { type: 'vector', tiles: [`hp://dots/${t.name}/${mode}/{z}/{x}/{y}`], minzoom: t.minzoom, maxzoom: t.maxzoom };
+  M.tiers.forEach(t => DKEYS.forEach(k => {
+    sources[`d-${t.name}-${k}`] = { type: 'vector', tiles: [`hp://dots/${t.name}/${k}/{z}/{x}/{y}`], minzoom: t.minzoom, maxzoom: t.maxzoom };
   }));
-  LEVELS.forEach(l => { const a = M.areas[l.set]; sources[`a-${l.key}`] = { type: 'vector', tiles: [`hp://areas/${l.set}/{z}/{x}/{y}`], minzoom: a.minzoom, maxzoom: a.maxzoom }; });
-  const labels = labelLayers().map(l => { const { _below, ...rest } = l; return { l: rest, below: !!_below }; });   // unsplit until us.json loads
+  AREAS.forEach(l => { const a = M.areas[l.set]; sources[`a-${l.key}`] = { type: 'vector', tiles: [`hp://areas/${l.set}/{z}/{x}/{y}`], minzoom: a.minzoom, maxzoom: a.maxzoom }; });
   // The mask fills foreign land and open sea with the water color: it darkens Canada and Mexico
-  // and matches US waters exactly, so it leaves no halo around coasts and islands.
+  // (and their place names) and matches US waters exactly, so it leaves no halo around coasts.
   const mask = { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': P.water, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.7, 9, 0.6, 13, 0.35] } };
   return {
     version: 8,
     glyphs: OFM + '/fonts/{fontstack}/{range}.pbf',
     sources,
-    layers: [...baseLayers(), ...areaFillLayers(), ...dotLayers(), ...areaLineLayers(),
-      ...labels.filter(x => x.below).map(x => x.l), mask, ...labels.filter(x => !x.below).map(x => x.l)],
+    layers: [...baseLayers(), ...areaFillLayers(), ...dotLayers(), ...areaLineLayers(), ...labelLayers(), mask],
   };
 }
 
 // ---------------------------------------------------------------- apply state to the map
 function applyMode(opts = {}) {
-  for (const t of M.tiers) for (const mode of ['value', 'rent']) {
-    const id = `dot-${t.name}-${mode}`;
-    map.setLayoutProperty(id, 'visibility', S.view === 'dots' && S.mode === mode ? 'visible' : 'none');
-    map.setPaintProperty(id, 'circle-color', dotColorExpr(mode));
-    map.setFilter(id, ['in', ['get', 'b'], ['literal', visibleBins(mode)]]);
+  if (sizeView() && !sizeAvailable(S.size)) S.size = '1';
+  // a view can't show every one of its classes hidden (e.g. after isolating "No cash rent" on paid-rent dots)
+  const hk = ckey();
+  if (shownClasses(hk).every(c => S.hidden[hk].has(c))) S.hidden[hk].clear();
+  if (S.sel && (S.sel.level === 'z') !== sizeView()) closeDetail();
+  for (const t of M.tiers) for (const k of DKEYS) {
+    const id = `dot-${t.name}-${k}`, on = dotVisible(k);
+    map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+    if (on) {       // hidden layers are refreshed when they are next shown
+      map.setPaintProperty(id, 'circle-color', dotColorExpr(k));
+      map.setFilter(id, ['in', ['get', 'k'], ['literal', visibleKs(k)]]);
+    }
   }
   setHitVisibility();
-  for (const l of LEVELS) {
-    map.setPaintProperty(`af-${l.key}`, 'fill-color', S.view === 'areas' ? areaColorExpr(S.mode) : '#000');
-    map.setPaintProperty(`af-${l.key}`, 'fill-opacity', S.view === 'areas' ? 0.88 : 0);
-    map.setFilter(`af-${l.key}`, S.view === 'areas' ? areaFilter(S.mode) : ['has', 'id']);
-    map.setLayoutProperty(`ao-${l.key}`, 'visibility', S.view === 'areas' ? 'visible' : 'none');
+  for (const l of AREAS) {
+    map.setPaintProperty(`af-${l.key}`, 'fill-color', fillPaint(l));
+    map.setPaintProperty(`af-${l.key}`, 'fill-opacity', fillOpacity(l));
+    map.setFilter(`af-${l.key}`, fillFilter(l));
+    map.setLayoutProperty(`ao-${l.key}`, 'visibility', (l.key === 'z' ? sizeView() : areasOn()) ? 'visible' : 'none');
   }
   renderLegend();
   syncSegs();
   updateRatio();
-  if (S.sel && opts.colors) renderDetail({ keepScroll: true });   // only the bar colors depend on these settings
+  const note = noteText();
+  if ($('#modeNote').textContent !== note) $('#modeNote').textContent = note;
+  if (S.sel && opts.redraw) renderDetail({ keepScroll: true });
+  if (tip && !tip.hidden && lastEvt) onMove(lastEvt);
   writeHash();
 }
 function applyLabels() {
   for (const l of labelLayers()) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', S.labels ? 'visible' : 'none');
   map.setLayoutProperty('road', 'visibility', S.labels ? 'visible' : 'none');
 }
-// segmented radio groups: checked state + roving tabindex
+// segmented radio groups: checked state, roving tabindex, contextual rows
+const SEGS = [['#modeSeg', 'mode'], ['#rentSeg', 'rent'], ['#whoSeg', 'who'], ['#sizeSeg', 'size'], ['#viewSeg', 'view'], ['#palSeg', 'pal']];
 function syncSegs() {
-  const sets = [['#modeSeg', 'mode', S.mode], ['#viewSeg', 'view', S.view], ['#palSeg', 'pal', S.pal]];
-  for (const [sel, key, val] of sets) $$(sel + ' button').forEach(b => {
-    const on = b.dataset[key] === val;
+  for (const [sel, key] of SEGS) $$(sel + ' button').forEach(b => {
+    const on = b.dataset[key] === S[key];
     b.setAttribute('aria-checked', String(on));
     b.tabIndex = on ? 0 : -1;
   });
+  $('#rentSeg').hidden = S.mode !== 'rent';
+  $('#whoSeg').hidden = S.mode !== 'cost';
+  $$('#sizeSeg button').forEach(b => {
+    const ok = b.dataset.size === 'all' || sizeAvailable(b.dataset.size);
+    b.disabled = !ok;
+    b.title = ok ? '' : 'Zillow publishes no home values for studios';
+  });
+  $('#viewSeg').closest('.optrow').classList.toggle('dim', sizeView());
+  $('#viewSeg').title = sizeView() ? 'Choosing one goes back to all sizes' : '';
+}
+function noteText() {
+  const month = monthName(M.vintage.zhvi), buy = `20% down, ${rateTxt()} 30-year fixed, tax and insurance`;
+  if (sizeView()) {
+    const n = sizeName(S.size), f = sizeField()[0];
+    return {
+      v: `Typical value of a ${n} home in each ZIP code (Zillow, ${month}).`,
+      m: `HUD Fair Market Rent for a ${n} in each ZIP code: what a recent mover pays (40th percentile), utilities included.`,
+      p: `Median rent tenants pay for a ${n} in each ZIP code, utilities included (Census, in ${month} dollars).`,
+      c: `What buying a typical ${n} home costs a month in each ZIP code: ${buy}.`,
+    }[f];
+  }
+  switch (dkey()) {
+    case 'v': return `What owners' homes are worth, in ${month} dollars.`;
+    case 'm': return 'What each rental would rent for if it were listed today, utilities included.';
+    case 'p': return 'What tenants pay now, utilities included, rent-regulated and long-held leases too.';
+    default:
+      return S.who === 'owners' ? `What buying each owner-occupied home today would cost a month: ${buy}.`
+        : S.who === 'renters' ? 'What each rental would cost a month if let today, utilities included.'
+        : `What moving into each home today costs a month: buying it (${buy}) or renting it.`;
+  }
 }
 
 // ---------------------------------------------------------------- legend
+function legendShares() {
+  const k = ckey();
+  if (sizeView()) return M.sizes[sizeField()] || [];
+  if (k === 'c') {
+    const o = M.classes.c.us_owners, r = M.classes.c.us_renters;
+    return S.who === 'owners' ? o : S.who === 'renters' ? r : o.map((x, i) => x + r[i]);
+  }
+  return M.classes[k].us;
+}
+const NAMES = { v: 'Home value', m: 'Market rent', p: 'Rent paid', c: 'Monthly cost', co: 'Cost to buy' };
+function legendTitle() {
+  if (sizeView()) {
+    const n = sizeShort(S.size);
+    return { v: `${n} home value`, m: `${n} market rent (HUD)`, p: `${n} rent paid`, c: `${n} cost to buy` }[sizeField()[0]];
+  }
+  const k = dkey();
+  const base = k === 'c' && S.who === 'owners' ? 'Cost to buy' : k === 'c' && S.who === 'renters' ? 'Market rent' : NAMES[k];
+  return S.view === 'areas' ? 'Median ' + base.toLowerCase() : base;
+}
+function shareNoun() {
+  if (sizeView()) return 'US homes, by ZIP code';
+  return { v: 'US owner-occupied homes', p: 'US rented homes', m: 'US rented homes' }[dkey()] ||
+    (S.who === 'owners' ? 'US owner-occupied homes' : S.who === 'renters' ? 'US rented homes' : 'US homes');
+}
 function renderLegend() {
-  const cls = classes(), col = colors();
-  const us = M[S.mode].us_classes || [];
-  const tot = us.reduce((a, b) => a + b, 0);
-  const max = us.length ? Math.max(...us) : 1;
+  const k = ckey(), lab = labels(k), col = colors(k);
+  const us = legendShares();
+  const shown = shownClasses(k);
+  const tot = shown.reduce((a, i) => a + (us[i] || 0), 0);
+  const max = Math.max(1, ...shown.map(i => us[i] || 0));
   const focusI = document.activeElement && document.activeElement.closest && document.activeElement.closest('.lrow') ? document.activeElement.closest('.lrow').dataset.i : null;
-  const label = S.view === 'areas' ? (S.mode === 'value' ? 'Median home value' : 'Median monthly rent') : (S.mode === 'value' ? 'Home value' : 'Monthly rent');
-  const head = `<div class="lhead" aria-hidden="true"><span></span><span id="legendTitle">${label}</span><span>Share of US homes</span></div>`;
-  const rows = shownClasses().map(i => {
-    const lab = cls[i][0];
-    const off = S.hidden[S.mode].has(i);
-    const share = tot ? us[i] / tot : 0;
-    const shareTxt = share >= 0.095 ? Math.round(share * 100) : (share * 100).toFixed(1);
-    return `<button class="lrow${off ? ' off' : ''}" data-i="${i}" aria-pressed="${!off}" aria-label="${esc(lab)}, ${shareTxt}% of US ${S.mode === 'value' ? 'owner-occupied' : 'rented'} homes">
-      <span class="sw" style="background:${col[i]}"></span><span class="lb">${esc(lab)}</span>
-      <span class="bar"><i style="width:${(100 * (us.length ? us[i] / max : 0)).toFixed(1)}%"></i></span><span class="pc">${shareTxt}%</span></button>`;
+  const title = legendTitle();
+  const head = `<div class="lhead" aria-hidden="true"><span></span><span id="legendTitle">${esc(title)}</span><span>${sizeView() ? 'Share of homes' : 'Share of US homes'}</span></div>`;
+  const rows = shown.map(i => {
+    const off = S.hidden[k].has(i);
+    const share = tot ? (us[i] || 0) / tot : 0;
+    const shareTxt = share >= 0.095 ? Math.round(share * 100) : share >= 0.0005 ? (share * 100).toFixed(1) : share > 0 ? '<0.1' : '0';
+    return `<button class="lrow${off ? ' off' : ''}" data-i="${i}" aria-pressed="${!off}" aria-label="${esc(lab[i])}, ${shareTxt}% of ${shareNoun()}">
+      <span class="sw" style="background:${col[i]}"></span><span class="lb">${esc(lab[i])}</span>
+      <span class="bar"><i style="width:${(100 * (us[i] || 0) / max).toFixed(1)}%"></i></span><span class="pc">${shareTxt}%</span></button>`;
   }).join('');
   $('#legend').innerHTML = head + rows;
-  $('#legend').setAttribute('aria-label', `${label}. Each button hides or shows a price range.`);
-  $('#showAll').hidden = !shownClasses().some(i => S.hidden[S.mode].has(i));
+  $('#legend').setAttribute('aria-label', `${title}. Each button hides or shows a price range.`);
+  $('#showAll').hidden = !shown.some(i => S.hidden[k].has(i));
   if (focusI != null) { const r = $(`#legend .lrow[data-i="${focusI}"]`); if (r) r.focus(); }
 }
 function toggleClass(i) {
-  const h = S.hidden[S.mode];
+  const k = ckey(), h = S.hidden[k];
   if (h.has(i)) h.delete(i); else h.add(i);
-  if (shownClasses().every(k => h.has(k))) h.clear();     // hiding everything means "show everything"
+  if (shownClasses(k).every(c => h.has(c))) h.clear();     // hiding everything means "show everything"
   applyMode();
 }
 function isolateClass(i, before) {
-  const h = S.hidden[S.mode], shown = shownClasses();
-  const wasIsolated = shown.every(k => k === i ? !before.has(k) : before.has(k));
+  const k = ckey(), h = S.hidden[k], shown = shownClasses(k);
+  const wasIsolated = shown.every(c => c === i ? !before.has(c) : before.has(c));
   h.clear();
-  if (!wasIsolated) classes().forEach((_, k) => { if (k !== i) h.add(k); });
+  if (!wasIsolated) labels(k).forEach((_, c) => { if (c !== i) h.add(c); });
   applyMode();
 }
 // A click toggles at once; a double-click undoes those two toggles and isolates the class.
 let beforeClick = null;
 $('#legend').addEventListener('click', e => {
   const row = e.target.closest('.lrow'); if (!row) return;
-  if (e.detail <= 1) beforeClick = new Set(S.hidden[S.mode]);
+  if (e.detail <= 1) beforeClick = new Set(S.hidden[ckey()]);
   if (e.detail > 1) return;
   toggleClass(+row.dataset.i);
 });
 $('#legend').addEventListener('dblclick', e => {
   const row = e.target.closest('.lrow'); if (!row) return;
-  isolateClass(+row.dataset.i, beforeClick || new Set(S.hidden[S.mode]));
+  isolateClass(+row.dataset.i, beforeClick || new Set(S.hidden[ckey()]));
 });
 $('#legend').addEventListener('keydown', e => {
   const row = e.target.closest('.lrow'); if (!row) return;
-  if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); isolateClass(+row.dataset.i, new Set(S.hidden[S.mode])); }
+  if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); isolateClass(+row.dataset.i, new Set(S.hidden[ckey()])); }
 });
-$('#showAll').addEventListener('click', () => { S.hidden[S.mode].clear(); applyMode(); $('#legend .lrow')?.focus(); });
+$('#showAll').addEventListener('click', () => { S.hidden[ckey()].clear(); applyMode(); $('#legend .lrow')?.focus(); });
 $('#legendHint').textContent = IS_TOUCH ? 'Tap a price to hide or show it' : 'Click to hide · double-click (or Shift+Enter) to isolate';
 
 // ---------------------------------------------------------------- dot ratio
@@ -468,8 +549,8 @@ function tierAt(z) {
 }
 function updateRatio() {
   const z = map.getZoom();
-  const s = S.view === 'areas'
-    ? 'Median of each ' + (z < 8 ? 'county' : z < 10 ? 'census tract' : 'block group')
+  const s = sizeView() ? (z < M.areas.zcta.minzoom ? 'Zoom in to see ZIP codes' : 'Each ZIP code, by its typical price')
+    : S.view === 'areas' ? 'Median of each ' + (z < 8 ? 'county' : z < 10 ? 'census tract' : 'block group')
     : `Each dot is ${tierAt(z).ratio.toLocaleString('en-US')} homes`;
   const el = $('#ratio');
   if (el.textContent !== s) el.textContent = s;
@@ -478,27 +559,43 @@ function updateRatio() {
 // ---------------------------------------------------------------- hover & tooltip
 const tip = $('#tip');
 let hoverId = null, hoverLevel = null;
-function hitLayers() { return LEVELS.map(l => `af-${l.key}`); }
+const hitLayers = () => sizeView() ? ['af-z'] : LEVELS.map(l => `af-${l.key}`);
 function setHover(level, id) {
   if (id === hoverId && level === hoverLevel) return;
   if (hoverLevel) map.setFilter(`ah-${hoverLevel}`, ['==', ['get', 'id'], '']);
   hoverId = id; hoverLevel = level;
   if (level) map.setFilter(`ah-${level}`, ['==', ['get', 'id'], id]);
 }
+// the row for the dataset on screen is highlighted
+function curRow() {
+  if (sizeView()) return sizeField()[0];
+  const k = dkey();
+  return k === 'c' ? (S.who === 'renters' ? 'm' : S.who === 'owners' ? 'co' : 'c') : k;
+}
+function kvRows(rows) {
+  const cur = curRow();
+  return `<div class="kv">${rows.map(([k, label, val]) => `<span class="${k === cur ? 'cur' : ''}">${label}</span><span class="${k === cur ? 'cur' : ''}">${val}</span>`).join('')}</div>`;
+}
 function tipHtml(level, p) {
-  const title = areaTitle(level, p.id), where = areaWhere(level, p.id);
-  if (p.o == null && p.r == null) {
-    return `<div class="tt">${esc(title)}</div>${where ? `<div class="ts">${esc(where)}</div>` : ''}<div class="th">No Census estimate for this area</div>`;
+  const title = areaTitle(level, p.id), where = areaWhere(level, p.id, p);
+  const head = `<div class="tt">${esc(title)}</div>${where ? `<div class="ts">${esc(where)}</div>` : ''}`;
+  if (level === 'z') {
+    const b = S.size, n = sizeName(b);
+    const rows = [['v', 'Home value (Zillow)', money(p['v' + b])], ['c', 'Cost to buy, a month', monthly(p['c' + b])],
+      ['m', 'Market rent (HUD)', monthly(p['m' + b])], ['p', 'Rent paid (Census)', monthly(p['p' + b])]];
+    return head + `<div class="tsec">Typical ${n}${b === '0' ? '' : ' home'}</div>` + kvRows(b === '0' ? rows.slice(2) : rows) + '<div class="th">Click for all sizes</div>';
   }
-  const v = p.v != null ? (p.ve ? '≈' : '') + money(p.v, 'value') : '—';
-  const g = p.g != null ? (p.ge ? '≈' : '') + money(p.g, 'rent') : '—';
-  return `<div class="tt">${esc(title)}</div>${where ? `<div class="ts">${esc(where)}</div>` : ''}
-    <div class="kv"><span>Median home value</span><span>${v}</span><span>Median rent</span><span>${g}</span>
-    <span>Owner homes</span><span>${p.x ? '≈' : ''}${n0(+p.o || 0)}</span><span>Rented homes</span><span>${p.x ? '≈' : ''}${n0(+p.r || 0)}</span></div>
-    <div class="th">${p.x ? 'Estimated from county totals · ' : ''}Click for details</div>`;
+  const o = +p.o || 0, r = +p.r || 0, occ = o + r, est = p.x ? '≈' : '';
+  if (!occ) return head + '<div class="th">No occupied homes here in the Census figures</div>';
+  const rows = [['v', 'Home value', money(p.v)], ['m', 'Market rent', monthly(p.m)], ['p', 'Rent paid', monthly(p.p)],
+    ['co', 'Cost to buy, a month', monthly(p.co)]];
+  if (curRow() === 'c') rows.push(['c', 'Monthly cost, all homes', monthly(p.c)]);
+  return head + kvRows(rows) +
+    `<div class="tfoot">${est}${n0(occ)} homes · ${pct(o, occ)} owned</div>` +
+    `<div class="th">${p.x ? 'Estimated from county totals · ' : ''}Medians · click for details</div>`;
 }
 function featureAt(point) {
-  if (!hitVisible()) return null;
+  if (!sizeView() && !hitVisible()) return null;
   const fs = map.queryRenderedFeatures(point, { layers: hitLayers().filter(id => map.getLayer(id)) });
   if (!fs.length) return null;
   const f = fs[0];
@@ -544,16 +641,21 @@ function pickArea(point, cb) {
   const check = () => {
     if (tok !== pickTok) return;
     const h = featureAt(point);
-    const z = map.getZoom(), lvl = LEVELS.find(l => z >= l.minzoom && z < l.maxzoom) || LEVELS[2];
-    const settled = performance.now() - revealedAt > 3000 && map.isSourceLoaded(`a-${lvl.key}`);
+    const z = map.getZoom();
+    const src = sizeView() ? 'a-z' : 'a-' + (LEVELS.find(l => z >= l.minzoom && z < l.maxzoom) || LEVELS[2]).key;
+    const settled = performance.now() - revealedAt > 3000 && map.isSourceLoaded(src);
     if (h || settled || performance.now() - t0 > 20000) cb(h && h.props.id ? h : null);
     else setTimeout(check, 200);
   };
   check();
 }
+let hitVis = '';
 function setHitVisibility() {
-  const v = hitVisible() ? 'visible' : 'none';
-  for (const l of LEVELS) for (const p of ['af', 'ah', 'as-case', 'as']) map.setLayoutProperty(`${p}-${l.key}`, 'visibility', v);
+  const now = AREAS.map(layerVis).join();
+  // layers just switched on report their (unrequested) sources as loaded: restart pickArea's grace period
+  if (now !== hitVis && hitVis) revealedAt = performance.now();
+  hitVis = now;
+  for (const l of AREAS) for (const p of ['af', 'ah', 'as-case', 'as']) map.setLayoutProperty(`${p}-${l.key}`, 'visibility', layerVis(l));
 }
 
 // ---------------------------------------------------------------- detail panel
@@ -568,7 +670,7 @@ function shard(cid) {
 }
 function rec(arr) { const o = {}; SUM.fields.forEach((f, i) => { o[f] = arr[i]; }); return o; }
 async function getRecord(level, id) {
-  await sumP;
+  await loadSummary();
   if (level === 'us') return rec(SUM.us);
   if (level === 's') return SUM.state[id] ? rec(SUM.state[id][2]) : null;
   if (level === 'c') return SUM.county[id] ? rec(SUM.county[id][1]) : null;
@@ -587,29 +689,81 @@ function chain(level, id) {
 }
 const CRUMB = { b: 'Block group', t: 'Tract', c: 'County', s: 'State', us: 'US' };
 const LEVEL_ORDER = ['us', 's', 'c', 't', 'b'];
-function distHtml(mode, r) {
-  const vals = r[mode === 'value' ? 'value_classes' : 'rent_classes'] || [];
-  const tot = vals.reduce((a, b) => a + b, 0);
-  if (!tot) return `<div class="note">No ${mode === 'value' ? 'owner-occupied' : 'rented'} homes here.</div>`;
-  const cls = classes(mode), col = colors(mode), max = Math.max(...vals);
-  const medK = classOf(mode, r[mode]);
-  return `<div class="dist" role="list" aria-label="${mode === 'value' ? 'Home values' : 'Monthly rents'}">` + cls.map(([label], i) => {
-    const med = i === medK && label !== 'No cash rent';
-    return `<div class="drow${med ? ' med' : ''}" role="listitem"><span class="dl">${esc(label)}${med ? '<span class="mk"> · median</span>' : ''}</span>
-    <span class="db" aria-hidden="true"><i style="width:${(100 * vals[i] / max).toFixed(1)}%;background:${col[i]}"></i></span><span class="dp">${pct(vals[i], tot)}</span></div>`;
+const sum = a => (a || []).reduce((x, y) => x + y, 0);
+function medTag(on) { return on ? '<span class="mk"> · median</span>' : ''; }
+// distribution charts: values (owners), rents (market vs paid), monthly cost (buying vs renting)
+function valueChart(r) {
+  const vals = r.hv || [], tot = sum(vals);
+  if (!tot) return '<div class="note">No owner-occupied homes here.</div>';
+  const lab = labels('v'), col = colors('v'), max = Math.max(...vals), medK = classOf('v', r.v);
+  return `<div class="dist" role="list" aria-label="Home values">` + lab.map((l, i) => `<div class="drow${i === medK ? ' med' : ''}" role="listitem">
+    <span class="dl">${esc(l)}${medTag(i === medK)}</span><span class="db" aria-hidden="true"><i style="width:${(100 * vals[i] / max).toFixed(1)}%;background:${col[i]}"></i></span>
+    <span class="dp">${pct(vals[i], tot)}</span></div>`).join('') + '</div>';
+}
+function rentChart(r) {
+  const hm = r.hm || [], hp = r.hp || [], tm = sum(hm), tp = sum(hp);
+  if (!tm && !tp) return '<div class="note">No rented homes here.</div>';
+  const lab = labels('p'), col = colors('p'), max = Math.max(...hm.map(x => x / (tm || 1)), ...hp.map(x => x / (tp || 1)));
+  const km = classOf('m', r.m), kp = classOf('p', r.p), first = S.rent === 'paid' ? 'p' : 'm';
+  const bar = (k, i) => {
+    const v = k === 'm' ? (hm[i] || 0) / (tm || 1) : (hp[i] || 0) / (tp || 1);
+    return `<i class="${k}" style="width:${(100 * v / max).toFixed(1)}%;background:${col[i]}"></i>`;
+  };
+  return `<div class="dsum">Median market rent ${monthly(r.m)} · median rent paid ${monthly(r.p)}</div>
+    <div class="dkey"><span><i class="sw m"></i>Market rent</span><span><i class="sw p"></i>What tenants pay</span></div>
+    <div class="dist pair" role="list" aria-label="Monthly rents, market and paid">` + lab.map((l, i) => {
+    const nocash = i === lab.length - 1;
+    const med = !nocash && (i === km || i === kp);
+    const pm = nocash ? '' : pct(hm[i] || 0, tm), pp = pct(hp[i] || 0, tp);
+    return `<div class="drow${med ? ' med' : ''}" role="listitem" aria-label="${esc(l)}: ${nocash ? '' : 'market ' + pm + ', '}paid ${pp}">
+      <span class="dl">${esc(l)}</span>
+      <span class="db two" aria-hidden="true">${nocash ? '' : bar('m', i)}${bar('p', i)}</span>
+      <span class="dp">${first === 'm' && !nocash ? pm : pp}</span></div>`;
   }).join('') + '</div>';
 }
+function costChart(r) {
+  const ho = r.hco || [], hr = r.hm || [], tot = sum(ho) + sum(hr);
+  if (!tot) return '<div class="note">No homes here.</div>';
+  const lab = labels('c'), col = colors('c'), max = Math.max(...lab.map((_, i) => (ho[i] || 0) + (hr[i] || 0)));
+  const medK = classOf('c', r.c);
+  return `<div class="dsum">Median for all homes: ${monthly(r.c)} a month</div>
+    <div class="dkey"><span><i class="sw o"></i>Buying (owner homes)</span><span><i class="sw r"></i>Renting</span></div>
+    <div class="dist" role="list" aria-label="Monthly cost, buying and renting">` + lab.map((l, i) => {
+    const o = ho[i] || 0, rr = hr[i] || 0;
+    return `<div class="drow${i === medK ? ' med' : ''}" role="listitem" aria-label="${esc(l)}: ${pct(o + rr, tot)} of homes, ${pct(o, o + rr)} of them owner homes">
+      <span class="dl">${esc(l)}${medTag(i === medK)}</span>
+      <span class="db stack" aria-hidden="true"><i class="o" style="width:${(100 * o / max).toFixed(1)}%;background:${col[i]}"></i><i class="r" style="left:${(100 * o / max).toFixed(1)}%;width:${(100 * rr / max).toFixed(1)}%;background:${col[i]}"></i></span>
+      <span class="dp">${pct(o + rr, tot)}</span></div>`;
+  }).join('') + '</div>';
+}
+function incomeTxt(r) {
+  if (r.income == null) return '—';
+  return money(r.income) + (r.income_top ? '+' : '');
+}
 let detailToken = 0;
-async function renderDetail(opts = {}) {
+function renderDetail(opts = {}) {
+  return S.sel.level === 'z' ? renderZip(opts) : renderArea(opts);
+}
+function openDetail() {
+  $('#detail').hidden = false;
+  document.body.classList.add('detail-open');
+  if (small()) collapsePanel(true);
+  setSelected();
+}
+function sourcesNote(level) {
+  const V = M.vintage;
+  return `<div class="note">${level === 'b' ? 'Block-group estimates come from small survey samples; margins of error are wide. ' : ''}Prices in ${monthName(V.zhvi)} dollars.
+    Values: owners' estimates (Census ACS ${esc(M.acs)}) brought to today with Zillow's home value index; $2M+ homes from 2024–25 mortgage records.
+    Market rent: what the home would rent for if let today (recent movers' rents in the Census survey, Zillow's observed rents). Rents include utilities.
+    Cost to buy: 20% down, ${V.term_years}-year fixed at ${rateTxt()} (Freddie Mac, ${esc(dayName(V.mortgage_date))}), property tax at the local rate, insurance ${(100 * V.insurance).toFixed(1)}% of value a year.</div>`;
+}
+async function renderArea(opts) {
   const box = $('#detailBody');
   const { level, id } = S.sel;
   const o = S.sel.origin || S.sel;
   const token = ++detailToken;
   const scroll = opts.keepScroll ? $('#detail').scrollTop : 0;
-  $('#detail').hidden = false;
-  document.body.classList.add('detail-open');
-  if (small()) collapsePanel(true);
-  setSelected();
+  openDetail();
   const ch = chain(o.level, o.id);
   const crumbs = () => ch.map(([l, i]) => `<button data-l="${l}" data-id="${i}" aria-current="${l === level}">${CRUMB[l]}</button>`).join('');
   const head = () => `<div class="crumbs" role="group" aria-label="Zoom out to">${crumbs()}</div>
@@ -628,48 +782,79 @@ async function renderDetail(opts = {}) {
     return;
   }
   clearTimeout(loading);
-  if (!r) { box.innerHTML = head() + `<div class="loadingtxt">The Census published no estimates for this area.</div>`; wire(); return; }
+  if (!r || !((r.owners || 0) + (r.renters || 0))) { box.innerHTML = head() + `<div class="loadingtxt">The Census counted no occupied homes here.</div>`; wire(); return; }
   const occ = (r.owners || 0) + (r.renters || 0);
-  const est = flag => flag ? '≈' : '';
-  const moe = m => m ? `± ${dollars(m)}` : '';
-  // Ratios of top- or bottom-coded medians are only bounds.
-  const vTop = isTop(r.value, 'value'), rTop = isTop(r.rent, 'rent'), iTop = isTop(r.income, 'income');
-  const vLow = isBottom(r.value, 'value'), rLow = isBottom(r.rent, 'rent'), iLow = isBottom(r.income, 'income');
-  const ratio = (num, den, numHi, numLo, denHi, denLo, f) => {
-    if (!num || !den) return '—';
-    const up = numHi || denLo, down = numLo || denHi;
-    if (up && down) return '—';
-    return (up ? 'over ' : down ? 'under ' : '') + f(num / den);
-  };
-  const pti = ratio(r.value, r.income, vTop, vLow, iTop, iLow, x => x.toFixed(1) + '×');
-  const ptr = ratio(r.value, r.rent && 12 * r.rent, vTop, vLow, rTop, rLow, x => x.toFixed(1));
+  const moe = m => m ? `± ${Math.max(1, Math.round(100 * m))}% Census margin` : '';
+  const cur = curRow();
+  const tile = (k, label, val, sub) => `<div class="tile${k === cur ? ' cur' : ''}"><div class="k">${label}</div><div class="v">${val}</div><div class="m">${sub}</div></div>`;
   const rows = parents.filter(p => p.r && LEVEL_ORDER.indexOf(p.level) <= LEVEL_ORDER.indexOf(level)).map(p => `<tr class="${p.level === level ? 'cur' : ''}"><td>${esc(areaTitle(p.level, p.id))}</td>
-    <td>${est(p.r.value_est)}${money(p.r.value, 'value')}</td><td>${est(p.r.rent_est)}${money(p.r.rent, 'rent')}</td><td>${money(p.r.income, 'income')}</td></tr>`).join('');
+    <td>${money(p.r.v)}</td><td>${monthly(p.r.m)}</td><td>${monthly(p.r.p)}</td><td>${monthly(p.r.co)}</td></tr>`).join('');
   const synth = r.synth ? `<div class="note warn">The Census Bureau published no estimates for this ${level === 'b' ? 'block group' : 'tract'}. These figures are its share of the county total left over after the published block groups, split by 2020 housing units, so treat them as rough.</div>` : '';
+  const facts = [];
+  if (r.rent_burden != null) facts.push(`renters spend a median ${burden(r.rent_burden)} of income on rent`);
+  if (r.units) facts.push(`${pct(r.vacant, r.units)} of ${n0(r.units)} homes are vacant`);
+  if (r.tax != null) facts.push(`property tax about ${r.tax.toFixed(2)}% of value a year`);
+  const gap = r.mratio != null && level === 't' ? Math.round(100 * (r.mratio - 1)) : 0;
+  if (gap > 0) facts.push(`recent movers pay about ${gap}% more than the typical renter (before adjusting to Zillow's observed rents)`);
+  const charts = { v: ['Home values', valueChart(r)], m: ['Rents', rentChart(r)], c: ['Monthly cost', costChart(r)] };
+  const order = dkey() === 'v' ? ['v', 'm', 'c'] : dkey() === 'c' ? ['c', 'v', 'm'] : ['m', 'v', 'c'];
   box.innerHTML = head() + synth + `
     <div class="tiles">
-      <div class="tile"><div class="k">Median home value</div><div class="v">${est(r.value_est)}${money(r.value, 'value')}</div><div class="m">${r.value_est ? 'estimated from brackets' : moe(r.value_moe)}</div></div>
-      <div class="tile"><div class="k">Median monthly rent</div><div class="v">${est(r.rent_est)}${money(r.rent, 'rent')}</div><div class="m">${r.rent_est ? 'estimated from brackets' : moe(r.rent_moe)}</div></div>
-      <div class="tile"><div class="k">Median household income</div><div class="v">${money(r.income, 'income')}</div><div class="m">${moe(r.income_moe)}</div></div>
-      <div class="tile"><div class="k">Occupied homes</div><div class="v">${est(r.synth)}${n0(occ)}</div><div class="m">${pct(r.owners, occ)} owned · ${pct(r.renters, occ)} rented</div></div>
+      ${tile('v', 'Median home value', money(r.v), moe(r.v_moe) || "owners' estimates")}
+      ${tile('m', 'Market rent', monthly(r.m), 'median, if let today')}
+      ${tile('p', 'Rent paid', monthly(r.p), moe(r.p_moe) || 'median, what tenants pay')}
+      ${tile('co', 'Cost to buy', monthly(r.co), 'a month, median home')}
     </div>
     <div class="tiles">
-      <div class="tile"><div class="k">Value ÷ income</div><div class="v">${pti}</div><div class="m">years of median income</div></div>
-      <div class="tile"><div class="k">Rent as share of income</div><div class="v">${burden(r.rent_burden)}</div><div class="m">median for renters</div></div>
-      <div class="tile"><div class="k">Price-to-rent ratio</div><div class="v">${ptr}</div><div class="m">value ÷ annual rent</div></div>
-      <div class="tile"><div class="k">Vacant homes</div><div class="v">${pct(r.vacant, r.units)}</div><div class="m">of ${n0(r.units)} housing units</div></div>
+      ${tile('', 'Occupied homes', (r.synth ? '≈' : '') + n0(occ), `${pct(r.owners, occ)} owned · ${pct(r.renters, occ)} rented`)}
+      ${tile('', 'Buying vs renting', times(r.co, r.m), 'cost to buy ÷ market rent')}
+      ${tile('', 'Household income', incomeTxt(r), 'median, a year')}
+      ${tile('', 'Price ÷ income', (r.income_top && r.v > 0 ? 'under ' : '') + times(r.v, r.income), 'median value ÷ median income')}
     </div>
-    <h3 class="sec">Home values</h3>${distHtml('value', r)}
-    <h3 class="sec">Monthly rents</h3>${distHtml('rent', r)}
+    ${facts.length ? `<div class="facts">${esc(facts.join(' · ').replace(/^./, c => c.toUpperCase()))}.</div>` : ''}
+    ${order.map(k => `<h3 class="sec">${charts[k][0]}</h3>${charts[k][1]}`).join('')}
     <h3 class="sec">Compared with</h3>
-    <table class="cmp"><thead><tr><th scope="col"><span class="sr">Area</span></th><th scope="col">Value</th><th scope="col">Rent</th><th scope="col">Income</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="note">${level === 'b' ? 'Block-group estimates come from small survey samples; margins of error are wide. ' : ''}ACS ${esc(M.acs.replace(' ACS 5-year estimates', ''))} 5-year estimates, 2024 dollars. Values are owner estimates; rent includes utilities.</div>`;
+    <table class="cmp"><thead><tr><th scope="col"><span class="sr">Area</span></th><th scope="col">Value</th><th scope="col">Market</th><th scope="col">Paid</th><th scope="col">To buy</th></tr></thead><tbody>${rows}</tbody></table>
+    ${sourcesNote(level)}`;
   wire();
   $('#detail').scrollTop = scroll;
   if (opts.focus) $('#detail h2').focus({ preventScroll: true });
 }
+async function renderZip(opts) {
+  const box = $('#detailBody');
+  const { id } = S.sel, p = S.sel.props || {};
+  const token = ++detailToken;
+  const scroll = opts.keepScroll ? $('#detail').scrollTop : 0;
+  openDetail();
+  const draw = () => {
+    if (token !== detailToken) return;
+    const sizes = ['0', '1', '2', '3', '4', '5'].filter(b => b !== '5' || p.v5 != null);
+    const f = sizeField()[0];
+    const td = (k, v) => `<td class="${k === f ? 'cur' : ''}">${v}</td>`;
+    const rows = sizes.map(b => `<tr class="${b === S.size ? 'cur' : ''}"><td>${b === '5' ? '5+ bd' : sizeShort(b)}</td>
+      ${td('v', b === '0' ? '—' : money(p['v' + b]))}${td('c', b === '0' ? '—' : monthly(p['c' + b]))}${td('m', b === '5' ? '—' : monthly(p['m' + b]))}${td('p', b === '5' ? '—' : monthly(p['p' + b]))}</tr>`).join('');
+    const occ = (+p.o || 0) + (+p.r || 0);
+    box.innerHTML = `<h2 tabindex="-1">${esc(areaTitle('z', id))}</h2><div class="where">${esc(areaWhere('z', id, p))}</div>
+      <h3 class="sec">Typical price by size</h3>
+      <table class="cmp sizes-t"><thead><tr><th scope="col"><span class="sr">Size</span></th><th scope="col">Value</th><th scope="col">To buy</th><th scope="col">Market</th><th scope="col">Paid</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="note">Value: Zillow Home Value Index by bedrooms (${monthName(M.vintage.zhvi)}). To buy: a month, ${rateTxt()} 30-year fixed with 20% down, tax and insurance. Market: HUD Fair Market Rent FY${M.vintage.hud_fy}, the 40th percentile of what recent movers pay. Paid: Census median rent tenants pay, in today's dollars. Rents include utilities.</div>
+      <h3 class="sec">All homes in this ZIP code</h3>
+      <div class="tiles">
+        <div class="tile"><div class="k">Median home value</div><div class="v">${money(p.v)}</div><div class="m">Zillow typical: ${money(p.zhvi)}</div></div>
+        <div class="tile"><div class="k">Market rent</div><div class="v">${monthly(p.m)}</div><div class="m">Zillow asking: ${monthly(p.zori)}</div></div>
+        <div class="tile"><div class="k">Rent paid</div><div class="v">${monthly(p.p)}</div><div class="m">median</div></div>
+        <div class="tile"><div class="k">Cost to buy</div><div class="v">${monthly(p.co)}</div><div class="m">a month, median home</div></div>
+      </div>
+      <div class="facts">${n0(occ)} occupied homes, ${pct(+p.o || 0, occ)} owned. Medians from the block groups mostly inside this ZIP code.</div>
+      ${sourcesNote('z')}`;
+    $('#detail').scrollTop = scroll;
+    if (opts.focus) $('#detail h2').focus({ preventScroll: true });
+  };
+  draw();
+  if (!SUM) loadSummary().then(draw).catch(() => {});
+}
 function setSelected() {
-  for (const l of LEVELS) {
+  for (const l of AREAS) {
     const f = S.sel && S.sel.level === l.key ? ['==', ['get', 'id'], S.sel.id] : ['==', ['get', 'id'], ''];
     map.setFilter(`as-${l.key}`, f); map.setFilter(`as-case-${l.key}`, f);
   }
@@ -677,7 +862,7 @@ function setSelected() {
 let opener = null;
 function select(level, id, opts = {}) {
   if (!S.sel && document.activeElement && document.activeElement !== document.body) opener = document.activeElement;
-  S.sel = { level, id, origin: opts.origin || { level, id, lngLat: opts.lngLat } };
+  S.sel = { level, id, props: opts.props, origin: opts.origin || { level, id, lngLat: opts.lngLat } };
   const done = renderDetail({ focus: opts.focus });
   if (opts.fly) flyToArea(level, id);
   return done;
@@ -694,6 +879,7 @@ function closeDetail() {
 $('#detailClose').addEventListener('click', closeDetail);
 function flyToArea(level, id) {
   if (level === 'us') return home();
+  if (level === 'z') return;
   if (level === 's') {
     if (id === '02') return map.fitBounds(JUMPS.ak, { padding: pad(), duration: 900 });
     if (id === '15') return map.fitBounds(JUMPS.hi, { padding: pad(), duration: 900 });
@@ -721,7 +907,7 @@ function norm(s) {
   return n;
 }
 function loadSearch() {
-  if (!searchLoading) searchLoading = fetch('data/search.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => {
+  if (!searchLoading) searchLoading = Promise.all([fetch('data/search.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }), loadSummary().catch(() => null)]).then(([d]) => {
     searchIndex = d; searchNorm = d.map(x => norm(x[0]));
   }).catch(err => { searchLoading = null; throw err; });
   return searchLoading;
@@ -804,7 +990,7 @@ function go(it) {
   if (small()) { qEl.blur(); collapsePanel(true); }
   // a state or county search opens its numbers first, so the framing leaves room for the panel
   const kind = it[6], center = [it[3], it[2]];
-  if ((kind === 's' || kind === 'c') && it[7]) select(kind, it[7], { lngLat: kind === 'c' ? center : undefined });
+  if ((kind === 's' || kind === 'c') && it[7] && !sizeView()) select(kind, it[7], { lngLat: kind === 'c' ? center : undefined });
   if (kind === 's') {
     map.fitBounds([[it[5][0], it[5][1]], [it[5][2], it[5][3]]], { padding: pad(), maxZoom: 7.5, duration: 1200 });
   } else {
@@ -849,41 +1035,62 @@ function visibleCenter() {
   return [p.left + (r.width - p.left - p.right) / 2, p.top + (r.height - p.top - p.bottom) / 2];
 }
 function home() { map.fitBounds(CONUS, { padding: pad(), duration: 1000 }); }
+// #<value|rent|cost>[-paid][-buying|-renting][-areas|-studio|-<n>bd]/zoom/lat/lng
 let hashTimer = 0;
 function writeHash() {
   clearTimeout(hashTimer);
   hashTimer = setTimeout(() => {
     if (!map) return;
     const c = map.getCenter().wrap();
-    const h = `#${S.mode}${S.view === 'areas' ? '-areas' : ''}/${map.getZoom().toFixed(2)}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`;
+    const parts = [S.mode];
+    if (S.mode === 'rent' && S.rent === 'paid') parts.push('paid');
+    if (S.mode === 'cost' && S.who !== 'all') parts.push(S.who === 'owners' ? 'buying' : 'renting');
+    if (S.view === 'areas') parts.push('areas');
+    if (sizeView()) parts.push(S.size === '0' ? 'studio' : S.size + 'bd');
+    const h = `#${parts.join('-')}/${map.getZoom().toFixed(2)}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`;
     if (location.hash !== h) history.replaceState(null, '', h);
   }, 250);
 }
 function readHash() {
-  const m = location.hash.match(/^#(value|rent)(-areas)?(?:\/(-?[\d.]+)\/(-?[\d.]+)\/(-?[\d.]+))?$/);
+  const m = location.hash.match(/^#([a-z0-9-]+)(?:\/(-?[\d.]+)\/(-?[\d.]+)\/(-?[\d.]+))?$/);
   if (!m) return null;
-  S.mode = m[1]; S.view = m[2] ? 'areas' : 'dots';
-  if (!m[3]) return null;
-  const zoom = Number(m[3]), lat = Number(m[4]), lng = Number(m[5]);
+  const tok = m[1].split('-');
+  if (!['value', 'rent', 'cost'].includes(tok[0])) return null;
+  S.mode = tok[0];
+  S.rent = tok.includes('paid') ? 'paid' : 'market';
+  S.who = tok.includes('buying') ? 'owners' : tok.includes('renting') ? 'renters' : 'all';
+  S.view = tok.includes('areas') ? 'areas' : 'dots';
+  const sz = tok.find(t => /^(studio|[1-4]bd)$/.test(t));
+  S.size = sz ? (sz === 'studio' ? '0' : sz[0]) : 'all';
+  if (!m[2]) return null;
+  const zoom = Number(m[2]), lat = Number(m[3]), lng = Number(m[4]);
   if (![zoom, lat, lng].every(Number.isFinite) || Math.abs(lat) > 85 || zoom < 0 || zoom > 22) return null;
   return { zoom, center: [((lng + 540) % 360) - 180, lat] };
 }
 
 // ---------------------------------------------------------------- panel controls
-$$('#modeSeg button').forEach(b => b.addEventListener('click', () => { S.mode = b.dataset.mode; applyMode(); }));
-$$('#viewSeg button').forEach(b => b.addEventListener('click', () => { S.view = b.dataset.view; applyMode(); }));
-$$('#palSeg button').forEach(b => b.addEventListener('click', () => { S.pal = b.dataset.pal; try { localStorage.setItem('housing-pal', S.pal); } catch (_) {} applyMode({ colors: true }); }));
-$('#labelsToggle').addEventListener('change', e => { S.labels = e.target.checked; applyLabels(); });
-for (const seg of ['#modeSeg', '#viewSeg', '#palSeg']) {
-  $(seg).addEventListener('keydown', e => {
+const redrawing = { mode: true, rent: true, who: true, size: true };
+for (const [sel, key] of SEGS) {
+  $$(sel + ' button').forEach(b => b.addEventListener('click', () => {
+    if (b.disabled) return;
+    // picking Dots or Area medians while a size is shown goes back to all sizes
+    if (key === 'view' && sizeView()) S.size = 'all';
+    else if (S[key] === b.dataset[key]) return;
+    S[key] = b.dataset[key];
+    if (key === 'pal') try { localStorage.setItem('housing-pal', S.pal); } catch (_) {}
+    applyMode({ redraw: redrawing[key] || key === 'pal' });
+  }));
+  $(sel).addEventListener('keydown', e => {
     const fwd = ['ArrowRight', 'ArrowDown'].includes(e.key), back = ['ArrowLeft', 'ArrowUp'].includes(e.key);
     if (!fwd && !back && e.key !== 'Home' && e.key !== 'End') return;
     e.preventDefault();
-    const bs = $$('button', $(seg)); const i = bs.findIndex(b => b.getAttribute('aria-checked') === 'true');
+    const bs = $$('button', $(sel)).filter(b => !b.disabled);
+    const i = bs.findIndex(b => b.getAttribute('aria-checked') === 'true');
     const nb = e.key === 'Home' ? bs[0] : e.key === 'End' ? bs[bs.length - 1] : bs[(i + (fwd ? 1 : -1) + bs.length) % bs.length];
     nb.click(); nb.focus();
   });
 }
+$('#labelsToggle').addEventListener('change', e => { S.labels = e.target.checked; applyLabels(); });
 function collapsePanel(c) {
   $('#panel').classList.toggle('collapsed', c);
   $('#grip').setAttribute('aria-expanded', String(!c));
@@ -924,15 +1131,20 @@ function wireKeyboardMap() {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
     const pt = visibleCenter();
-    pickArea(pt, h => { if (h) select(h.level, h.props.id, { focus: true, lngLat: map.unproject(pt).toArray() }); });
+    pickArea(pt, h => { if (h) select(h.level, h.props.id, { focus: true, lngLat: map.unproject(pt).toArray(), props: h.props }); });
   });
 }
 
 // ---------------------------------------------------------------- boot
+// Start fetching the first dot archive's header and directory while the map style and base map load.
+function prefetch(view) {
+  const z = view ? view.zoom : 3.8;
+  const t = tierAt(z), files = !sizeView() && S.view === 'dots' ? t.files[dkey()] || [] : [];
+  for (const f of files) archive('dots/' + f.file).getHeader().catch(() => {});
+}
 async function boot() {
   try { const p = localStorage.getItem('housing-pal'); if (p && PALETTES[p]) S.pal = p; } catch (_) {}
   const view = readHash();
-  const usP = fetch('data/us.json').then(r => r.ok ? r.json() : null).catch(() => null);
   try {
     M = await fetch('data/manifest.json').then(r => { if (!r.ok) throw new Error('manifest ' + r.status); return r.json(); });
   } catch (err) {
@@ -940,16 +1152,24 @@ async function boot() {
     $('#loading > div').textContent = 'The map data could not be loaded. Please try again later.';
     return;
   }
-  $('#vintage').textContent = 'ACS ' + M.acs.replace(' ACS 5-year estimates', '');
+  ZIPL.minzoom = M.areas.zcta.minzoom;
+  prefetch(view);
+  const month = monthName(M.vintage.zhvi);
+  $('#vintage').textContent = 'Prices as of ' + month;
+  $('#aboutMonth').textContent = month;
+  $('#aboutTerms').textContent = `20% down, a ${M.vintage.term_years}-year fixed mortgage at ${rateTxt()}, the Freddie Mac average for ${dayName(M.vintage.mortgage_date)}`;
   $('#builtNote').textContent = `Data built ${M.built}.`;
   if (small()) collapsePanel(true);
+  if (sizeView() && !sizeAvailable(S.size)) S.size = '1';
   syncSegs();
+  $('#modeNote').textContent = noteText();
   map = new maplibregl.Map({
     container: 'map', style: buildStyle(),
     bounds: view ? undefined : CONUS, fitBoundsOptions: { padding: pad() },
     center: view ? view.center : undefined, zoom: view ? view.zoom : undefined,
     minZoom: 1.5, maxZoom: 17.5, attributionControl: false, dragRotate: false, pitchWithRotate: false,
     hash: false, fadeDuration: 150, maxTileCacheZoomLevels: 3,
+    pixelRatio: Math.min(2, window.devicePixelRatio || 1),     // 3x phones draw 2.25x the pixels for no visible gain
   });
   map.touchZoomRotate.disableRotation();
   map.keyboard.disableRotation();
@@ -959,8 +1179,7 @@ async function boot() {
   let ready = false;
   const onReady = () => {
     if (ready) return; ready = true;
-    renderLegend(); applyMode();
-    usP.then(us => { if (us && us.geometry) { US_SHAPE = us.geometry; splitLabels(); } });
+    applyMode();
     const ld = $('#loading');
     ld.classList.add('done');
     setTimeout(() => { ld.hidden = true; }, 450);
@@ -968,14 +1187,14 @@ async function boot() {
   map.once('style.load', onReady);
   map.once('load', onReady);
   setTimeout(() => { if (map.isStyleLoaded()) onReady(); }, 4000);
-  map.once('idle', () => setTimeout(revealHit, 300));
-  setTimeout(() => { if (ready) revealHit(); }, 6000);
+  map.once('idle', () => setTimeout(() => { revealHit(); loadSummary().catch(() => {}); }, 300));
+  setTimeout(() => { if (ready) { revealHit(); loadSummary().catch(() => {}); } }, 6000);
   map.on('zoom', updateRatio);
   map.on('moveend', writeHash);
   // a hand-edited URL hash jumps there (our own replaceState calls don't fire this)
   addEventListener('hashchange', () => {
     const v = readHash();
-    applyMode();
+    applyMode({ redraw: true });
     if (v) map.jumpTo({ center: v.center, zoom: v.zoom });
   });
   if (!IS_TOUCH) {
@@ -986,7 +1205,7 @@ async function boot() {
   map.on('click', e => {
     pickArea(e.point, hit => {
       if (!hit) { if (S.sel) closeDetail(); return; }
-      select(hit.level, hit.props.id, { lngLat: e.lngLat.toArray() }).then(() => {
+      select(hit.level, hit.props.id, { lngLat: e.lngLat.toArray(), props: hit.props }).then(() => {
         // on phones the details sheet covers the lower part of the map: keep the tapped spot in view
         if (!small() || $('#detail').hidden) return;
         const sheetTop = $('#detail').getBoundingClientRect().top - map.getContainer().getBoundingClientRect().top;
@@ -999,7 +1218,6 @@ async function boot() {
   map.on('dataloading', () => { clearTimeout(busyT); busyT = setTimeout(() => $('#busy').classList.add('on'), 300); });
   map.on('idle', () => { clearTimeout(busyT); $('#busy').classList.remove('on'); });
   map.on('error', e => { if (e && e.error && !/abort/i.test(String(e.error.message))) console.warn(e.error); });
-  sumP.then(() => { if (S.sel) renderDetail({ keepScroll: true }); }).catch(() => {});
 }
 boot();
 })();

@@ -2,11 +2,10 @@
 
 Input   work/geo/cb_state.zip    (Census cartographic boundary, cb_2024_us_state_500k; the 52 covered states)
         work/dots/*.npz          (so no home ends up under the mask)
-Output  data/mask.json   world minus the US, as hole-free polygons, drawn over foreign land and sea.
+Output  data/mask.json   world minus the US, as hole-free polygons, drawn over foreign land, sea and
+                         foreign place names (the app draws it above the labels, which dims them).
                          (MapLibre clips GeoJSON into tiles; a polygon with holes clipped at a tile
                          edge can fill the whole tile, which showed up as dark squares over US land.)
-        data/us.json     a US outline for `within` filters (foreign place names are dimmed), kept tight
-                         at land borders so Tijuana or Windsor don't count as US.
 """
 import os, json, glob
 import numpy as np, geopandas as gpd, shapely
@@ -59,12 +58,11 @@ def main():
     with open(os.path.join(OUT, 'mask.json'), 'w') as f:
         json.dump({'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'properties': {}, 'geometry': rounded(p)} for p in pieces]},
                   f, separators=(',', ':'))
-    coarse = shapely.simplify(land.buffer(0.008), 0.004)
-    with open(os.path.join(OUT, 'us.json'), 'w') as f:
-        json.dump({"type": "Feature", "properties": {}, "geometry": rounded(coarse, 3)}, f, separators=(',', ':'))
+    if os.path.exists(os.path.join(OUT, 'us.json')):
+        os.remove(os.path.join(OUT, 'us.json'))
     lost = int((~shapely.contains_xy(us, x, y)).sum())
     print(f'mask: {len(pieces)} hole-free pieces, {os.path.getsize(os.path.join(OUT, "mask.json")) // 1000} KB; '
-          f'us.json {os.path.getsize(os.path.join(OUT, "us.json")) // 1000} KB; dots under the mask: {lost}')
+          f'dots under the mask: {lost}')
 
 if __name__ == '__main__':
     main()
