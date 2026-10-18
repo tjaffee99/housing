@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>US Housing Prices, Dot by Dot</title>
 <meta name="description" content="An interactive dot density map of what American homes are worth, what they rent for and what they cost a month, in today's dollars: 130 million homes, one dot per 10, colored by price.">
-<meta name="theme-color" content="#0d0f13">
+<meta name="theme-color" content="#2b3038">
 <meta property="og:title" content="US Housing Prices, Dot by Dot">
 <meta property="og:description" content="Every owner-occupied and rented home in America on one map, colored by today's home value, market rent or monthly cost.">
 <meta property="og:type" content="website">
@@ -37,15 +37,15 @@
     <div id="searchStatus" class="sr" role="status" aria-live="polite"></div>
 
     <div class="seg" role="radiogroup" aria-label="What to show" id="modeSeg">
-      <button role="radio" data-mode="value" aria-checked="true">Home values</button>
+      <button role="radio" data-mode="cost" aria-checked="true">Monthly cost</button>
+      <button role="radio" data-mode="value" aria-checked="false">Home values</button>
       <button role="radio" data-mode="rent" aria-checked="false">Rents</button>
-      <button role="radio" data-mode="cost" aria-checked="false">Monthly cost</button>
     </div>
     <div class="seg small sub" role="radiogroup" aria-label="Which rents" id="rentSeg" hidden>
       <button role="radio" data-rent="market" aria-checked="true">Market rent</button>
       <button role="radio" data-rent="paid" aria-checked="false">What tenants pay</button>
     </div>
-    <div class="seg small sub" role="radiogroup" aria-label="Whose homes" id="whoSeg" hidden>
+    <div class="seg small sub" role="radiogroup" aria-label="Whose homes" id="whoSeg">
       <button role="radio" data-who="all" aria-checked="true">Everyone</button>
       <button role="radio" data-who="owners" aria-checked="false">Buying</button>
       <button role="radio" data-who="renters" aria-checked="false">Renting</button>

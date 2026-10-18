@@ -30,7 +30,7 @@ a:hover { text-decoration: underline; }
 .sep { color: var(--ink-3); }
 
 #app { position: fixed; inset: 0; }
-#map { position: absolute; inset: 0; background: var(--bg); }
+#map { position: absolute; inset: 0; background: #2b3038; }     /* the base map's land color */
 .maplibregl-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 #crosshair { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; z-index: 2; pointer-events: none;

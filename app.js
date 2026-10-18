@@ -26,7 +26,7 @@ const NO_CASH = '#7b808a';
 
 // ---------------------------------------------------------------- state
 const S = {
-  mode: 'value',            // 'value' | 'rent' | 'cost'
+  mode: 'cost',             // 'cost' | 'value' | 'rent'
   rent: 'market',           // rents: 'market' (if let today) | 'paid' (what tenants pay)
   who: 'all',               // monthly cost: 'all' | 'owners' (buying) | 'renters'
   size: 'all',              // 'all' or bedrooms '0'..'4': ZIP codes by typical price for that size
@@ -215,10 +215,12 @@ function classFilter(field, k, keepMissing) {
 
 // ---------------------------------------------------------------- base map style (OpenFreeMap / OpenMapTiles)
 const OFM = 'https://tiles.openfreemap.org';
+// A mid-dark slate base: light enough that streets, water and place names read at a glance, dark
+// enough that the darkest (cheapest) dot color still stands out and the brightest pops.
 const P = {
-  land: '#111318', water: '#0a0d13', park: '#121811', urban: '#14161b',
-  road: '#1f232b', roadHi: '#262a33', motor: '#2a2e38', bnd: '#3b404a', bnd2: '#555b66', building: '#181b21',
-  label: '#c4c9d2', label2: '#8b919c', halo: 'rgba(10,12,16,0.92)', waterLabel: '#4f6582',
+  land: '#2b3038', water: '#1a2636', park: '#2b3832', urban: '#2f343c', mask: '#1c222b',
+  road: '#3f4651', roadHi: '#4d5461', motor: '#5b6372', bnd: '#69717f', bnd2: '#8e95a3', building: '#363b44',
+  label: '#e9ecf1', label2: '#c9cfd8', halo: 'rgba(22,25,31,0.94)', waterLabel: '#8eaed6',
 };
 const W = (pairs) => ['interpolate', ['exponential', 1.5], ['zoom'], ...pairs.flat()];
 const NAME = ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name']];
@@ -227,7 +229,7 @@ function baseLayers() {
   const cls = (...c) => ['in', ['get', 'class'], ['literal', c]];
   const L = [];
   L.push({ id: 'bg', type: 'background', paint: { 'background-color': P.land } });
-  L.push({ ...B, id: 'park', type: 'fill', 'source-layer': 'park', minzoom: 8, paint: { 'fill-color': P.park, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 11, 1] } });
+  L.push({ ...B, id: 'park', type: 'fill', 'source-layer': 'park', minzoom: 7, paint: { 'fill-color': P.park, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 10, 1] } });
   L.push({ ...B, id: 'landuse', type: 'fill', 'source-layer': 'landuse', minzoom: 10, filter: cls('residential', 'commercial', 'industrial', 'retail'), paint: { 'fill-color': P.urban } });
   L.push({ ...B, id: 'water', type: 'fill', 'source-layer': 'water', filter: ['!=', ['get', 'brunnel'], 'tunnel'], paint: { 'fill-color': P.water } });
   L.push({ ...B, id: 'waterway', type: 'line', 'source-layer': 'waterway', minzoom: 8, filter: cls('river', 'canal'), paint: { 'line-color': P.water, 'line-width': W([[8, 0.6], [14, 3], [18, 10]]) } });
@@ -239,7 +241,7 @@ function baseLayers() {
       ['any', ['>=', ['zoom'], 12], cls('motorway', 'trunk'), ['all', ['>=', ['zoom'], 8], cls('primary')], ['all', ['>=', ['zoom'], 10], cls('secondary', 'tertiary')]]],
     layout: { 'line-join': 'round', 'line-cap': 'round', visibility: S.labels ? 'visible' : 'none' },
     paint: { 'line-color': ['match', ['get', 'class'], ['motorway', 'trunk'], P.motor, ['primary', 'secondary'], P.roadHi, P.road],
-      'line-width': roadW([[5, 0.5, 0.4, 0.3, 0.2, 0.2, 0.2, 0.1], [8, 0.9, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1], [12, 2, 1.8, 1.5, 1.2, 1, 0.7, 0.4], [15, 6, 5.5, 5, 4, 3.4, 2.6, 1.4], [18, 20, 18, 16, 14, 12, 10, 5]]) } });
+      'line-width': roadW([[5, 0.6, 0.5, 0.4, 0.3, 0.3, 0.2, 0.1], [8, 1.1, 0.9, 0.7, 0.5, 0.4, 0.3, 0.1], [12, 2.2, 2, 1.7, 1.4, 1.2, 0.9, 0.5], [15, 6, 5.5, 5, 4.2, 3.6, 2.8, 1.5], [18, 20, 18, 16, 14, 12, 10, 5]]) } });
   L.push({ ...B, id: 'bnd4', type: 'line', 'source-layer': 'boundary', minzoom: 2, filter: ['all', ['==', ['get', 'admin_level'], 4], ['!=', ['get', 'maritime'], 1]], layout: { 'line-join': 'round' },
     paint: { 'line-color': P.bnd, 'line-width': W([[3, 0.5], [8, 1], [14, 1.6]]) } });
   L.push({ ...B, id: 'bnd2', type: 'line', 'source-layer': 'boundary', filter: ['all', ['==', ['get', 'admin_level'], 2], ['!=', ['get', 'maritime'], 1], ['!=', ['get', 'disputed'], 1]], layout: { 'line-join': 'round' },
@@ -252,34 +254,34 @@ function labelLayers() {
   const B = { source: 'base', type: 'symbol' };
   const vis = S.labels ? 'visible' : 'none';
   const font = ['Noto Sans Regular'], bold = ['Noto Sans Bold'];
-  const halo = { 'text-halo-color': P.halo, 'text-halo-width': 1.4, 'text-halo-blur': 0.4 };
+  const halo = { 'text-halo-color': P.halo, 'text-halo-width': 1.6, 'text-halo-blur': 0.3 };
   return [
     { id: 'lbl-water', 'source-layer': 'water_name', minzoom: 3, filter: ['==', ['geometry-type'], 'Point'],
-      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[3, 10], [10, 13]]), 'text-max-width': 6, 'text-letter-spacing': 0.08 },
+      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[3, 10.5], [10, 13.5]]), 'text-max-width': 6, 'text-letter-spacing': 0.08 },
       paint: { 'text-color': P.waterLabel, ...halo } },
     { id: 'lbl-road', 'source-layer': 'transportation_name', minzoom: 13,
-      layout: { 'symbol-placement': 'line', 'text-field': NAME, 'text-font': font, 'text-size': W([[13, 10], [17, 13]]), 'text-max-angle': 30 },
-      paint: { 'text-color': P.label2, ...halo } },
-    { id: 'lbl-place-minor', 'source-layer': 'place', minzoom: 10, filter: ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter', 'hamlet', 'village']]],
-      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[10, 10.5], [15, 13]]), 'text-max-width': 7, 'text-transform': ['case', ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter']]], 'uppercase', 'none'], 'text-letter-spacing': ['case', ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter']]], 0.08, 0] },
+      layout: { 'symbol-placement': 'line', 'text-field': NAME, 'text-font': font, 'text-size': W([[13, 10.5], [17, 13.5]]), 'text-max-angle': 30 },
+      paint: { 'text-color': '#b4bbc6', ...halo } },
+    { id: 'lbl-place-minor', 'source-layer': 'place', minzoom: 9.5, filter: ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter', 'hamlet', 'village']]],
+      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[9.5, 10.5], [12, 12.5], [15, 14.5]]), 'text-max-width': 7, 'text-transform': ['case', ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter']]], 'uppercase', 'none'], 'text-letter-spacing': ['case', ['in', ['get', 'class'], ['literal', ['suburb', 'neighbourhood', 'quarter']]], 0.08, 0] },
       paint: { 'text-color': P.label2, ...halo } },
     { id: 'lbl-town', 'source-layer': 'place', minzoom: 7, filter: ['==', ['get', 'class'], 'town'],
-      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[7, 10.5], [12, 14]]), 'text-max-width': 7 },
+      layout: { 'text-field': NAME, 'text-font': font, 'text-size': W([[7, 11], [12, 15]]), 'text-max-width': 7 },
       paint: { 'text-color': P.label, ...halo } },
     { id: 'lbl-city', 'source-layer': 'place', minzoom: 3, filter: ['==', ['get', 'class'], 'city'],
       layout: { 'text-field': NAME, 'text-font': ['step', ['zoom'], ['literal', font], 6, ['literal', bold]], 'text-size': ['interpolate', ['linear'], ['zoom'], 3, ['case', ['<=', ['coalesce', ['get', 'rank'], 9], 3], 12, 10.5], 10, ['case', ['<=', ['coalesce', ['get', 'rank'], 9], 3], 18, 15]],
         'text-max-width': 7, 'symbol-sort-key': ['coalesce', ['get', 'rank'], 99] },
-      paint: { 'text-color': '#e4e7ec', ...halo, 'text-halo-width': 1.6 } },
+      paint: { 'text-color': '#f6f8fb', ...halo, 'text-halo-width': 1.8 } },
     { id: 'lbl-state', 'source-layer': 'place', minzoom: 3.2, maxzoom: 7, filter: ['==', ['get', 'class'], 'state'],
       layout: { 'text-field': NAME, 'text-font': bold, 'text-size': W([[3, 9.5], [6, 13]]), 'text-transform': 'uppercase', 'text-letter-spacing': 0.14, 'text-max-width': 8 },
-      paint: { 'text-color': '#7d8390', ...halo } },
+      paint: { 'text-color': '#a3aab6', ...halo } },
   ].map(d => ({ ...B, ...d, layout: { ...d.layout, visibility: vis } }));
 }
 
 // ---------------------------------------------------------------- data layers
 // Base dot radius by zoom; each tier grows its dots by up to 30% across its range so that
 // coverage stays even as the next tier (2.5x more dots) takes over.
-const R_STOPS = [[0, 0.55], [3, 0.75], [5, 0.95], [7, 1.15], [9, 1.35], [11, 1.6], [12, 1.8], [14, 2.6], [16, 4.6], [18, 9]];
+const R_STOPS = [[0, 0.55], [3, 0.8], [5, 1.0], [7, 1.2], [9, 1.45], [11, 1.75], [12, 2.0], [14, 3.0], [16, 5.2], [18, 10]];
 function baseRadius(z) {
   if (z <= R_STOPS[0][0]) return R_STOPS[0][1];
   for (let i = 1; i < R_STOPS.length; i++) {
@@ -315,7 +317,7 @@ function dotLayers() {
         paint: {
           'circle-color': dotColorExpr(k),
           'circle-radius': tierRadius(t, i === last),
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], ...stops.map((v, n) => n % 2 ? v * 0.92 : v)],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], ...stops],
           'circle-pitch-alignment': 'map',
         },
       });
@@ -378,7 +380,7 @@ function buildStyle() {
   AREAS.forEach(l => { const a = M.areas[l.set]; sources[`a-${l.key}`] = { type: 'vector', tiles: [`hp://areas/${l.set}/{z}/{x}/{y}`], minzoom: a.minzoom, maxzoom: a.maxzoom }; });
   // The mask fills foreign land and open sea with the water color: it darkens Canada and Mexico
   // (and their place names) and matches US waters exactly, so it leaves no halo around coasts.
-  const mask = { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': P.water, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.7, 9, 0.6, 13, 0.35] } };
+  const mask = { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': P.mask, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.72, 9, 0.62, 13, 0.4] } };
   return {
     version: 8,
     glyphs: OFM + '/fonts/{fontstack}/{range}.pbf',

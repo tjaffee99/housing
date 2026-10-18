@@ -11,7 +11,7 @@ $3,500 a month).
 - **Home values**: owner-occupied homes by what they are worth today.
 - **Rents**: rented homes by *market rent* (what the home would rent for if it were listed today) or by
   *what tenants pay* (including long-held and rent-regulated leases).
-- **Monthly cost**: every home on one monthly scale: owner-occupied homes by what buying them today
+- **Monthly cost** (the default): every home on one monthly scale: owner-occupied homes by what buying them today
   would cost (20% down, 30-year fixed at the latest Freddie Mac rate, property tax, insurance),
   rented homes by market rent. *Buying* and *Renting* show each group alone.
 - **Size** (Studio … 4 bd): ZIP codes colored by the typical price of a home with that many
